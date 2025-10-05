@@ -109,7 +109,8 @@
                             id: client.id,
                             name: client.name,
                             managerName: mgr.name,
-                            managerId: mgr.id
+                            managerId: mgr.id,
+                            videosPerDay: client.videosPerDay || 6
                         });
                     });
                 }
@@ -124,9 +125,12 @@
         }
 
         function getClientStats(clientId) {
+            const client = getAllClients().find(c => c.id === clientId);
+            const videosPerDay = client ? client.videosPerDay : 6;
+            
             const clientSessions = data.sessions.filter(s => s.clientId === clientId && s.materialReceived);
             const totalVideos = clientSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
-            const coverageDays = Math.floor(totalVideos / 6); // 6 videos per day
+            const coverageDays = Math.floor(totalVideos / videosPerDay);
             
             // Calculate coverage until date (today + 3 days production + coverage days)
             const today = new Date();
@@ -137,6 +141,7 @@
                 sessionCount: clientSessions.length,
                 totalVideos,
                 coverageDays,
+                videosPerDay,
                 coverageUntil: coverageUntil.toLocaleDateString(),
                 isLowCoverage: coverageDays < 5
             };
@@ -316,6 +321,7 @@
                                         <tr>
                                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Client</th>
                                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Account Manager</th>
+                                            <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Videos/Day</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Sessions</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Total Videos</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Coverage Days</th>
@@ -326,7 +332,7 @@
                                     </thead>
                                     <tbody class="divide-y divide-slate-200">
                                         ${filtered.length === 0 ? 
-                                            '<tr><td colspan="8" class="px-6 py-12 text-center text-slate-500">No clients found</td></tr>' :
+                                            '<tr><td colspan="9" class="px-6 py-12 text-center text-slate-500">No clients found</td></tr>' :
                                             filtered.map(client => {
                                                 const stats = getClientStats(client.id);
                                                 const sessions = data.sessions.filter(s => s.clientId === client.id);
@@ -340,6 +346,11 @@
                                                             </button>
                                                         </td>
                                                         <td class="px-6 py-4 text-slate-700">${client.managerName}</td>
+                                                        <td class="px-6 py-4 text-center">
+                                                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
+                                                                ${stats.videosPerDay}
+                                                            </span>
+                                                        </td>
                                                         <td class="px-6 py-4 text-center">
                                                             <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-slate-100 text-slate-800">
                                                                 ${stats.sessionCount}
@@ -405,7 +416,11 @@
                         </div>
 
                         <!-- Stats -->
-                        <div class="grid grid-cols-4 gap-4 mb-6">
+                        <div class="grid grid-cols-5 gap-4 mb-6">
+                            <div class="bg-slate-50 rounded-lg p-4">
+                                <div class="text-xs font-medium text-slate-600 mb-1">Videos/Day</div>
+                                <div class="text-2xl font-bold text-purple-600">${stats.videosPerDay}</div>
+                            </div>
                             <div class="bg-slate-50 rounded-lg p-4">
                                 <div class="text-xs font-medium text-slate-600 mb-1">Sessions</div>
                                 <div class="text-2xl font-bold text-slate-900">${stats.sessionCount}</div>
