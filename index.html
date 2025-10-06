@@ -144,9 +144,13 @@
             const totalVideos = clientSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
             const coverageDays = Math.floor(totalVideos / videosPerDay);
             
+            // Calculate coverage until date
+            // Material received = ready to post, so coverage starts today
+            // Coverage until = today + coverage days
             const today = new Date();
+            today.setHours(0, 0, 0, 0); // Reset to start of day
             const coverageUntil = new Date(today);
-            coverageUntil.setDate(coverageUntil.getDate() + 3 + coverageDays);
+            coverageUntil.setDate(coverageUntil.getDate() + coverageDays);
             
             return {
                 sessionCount: clientSessions.length,
@@ -299,9 +303,14 @@
             const newVideos = calculateSessionVideos(duration);
             const newCoverageDays = Math.floor((stats.totalVideos + newVideos) / stats.videosPerDay);
             
+            // New material needs 3 days production time
             const today = new Date();
-            const newCoverageUntil = new Date(today);
-            newCoverageUntil.setDate(newCoverageUntil.getDate() + 3 + newCoverageDays);
+            today.setHours(0, 0, 0, 0);
+            const readyDate = new Date(today);
+            readyDate.setDate(readyDate.getDate() + 3);
+            
+            const newCoverageUntil = new Date(readyDate);
+            newCoverageUntil.setDate(newCoverageUntil.getDate() + newCoverageDays);
             
             document.getElementById('calc-result').innerHTML = `
                 <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-200">
@@ -312,18 +321,26 @@
                             <span class="font-bold text-slate-900">+${newVideos} videos</span>
                         </div>
                         <div class="flex justify-between">
+                            <span class="text-slate-700">Production Time:</span>
+                            <span class="font-medium text-slate-900">3 days</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-700">Ready to Post:</span>
+                            <span class="font-medium text-slate-900">${readyDate.toLocaleDateString()}</span>
+                        </div>
+                        <div class="flex justify-between border-t pt-2">
                             <span class="text-slate-700">Current Coverage:</span>
                             <span class="font-medium text-slate-900">${stats.coverageDays} days</span>
                         </div>
-                        <div class="flex justify-between border-t pt-2">
-                            <span class="text-slate-700">New Coverage:</span>
+                        <div class="flex justify-between">
+                            <span class="text-slate-700">New Total Coverage:</span>
                             <span class="font-bold text-purple-600 text-lg">${newCoverageDays} days</span>
                         </div>
-                        <div class="flex justify-between">
+                        <div class="flex justify-between border-t pt-2">
                             <span class="text-slate-700">Coverage Until:</span>
                             <span class="font-bold text-purple-600">${newCoverageUntil.toLocaleDateString()}</span>
                         </div>
-                        <div class="flex justify-between border-t pt-2">
+                        <div class="flex justify-between">
                             <span class="text-slate-700">Extension:</span>
                             <span class="font-bold text-emerald-600 text-lg">+${newCoverageDays - stats.coverageDays} days</span>
                         </div>
@@ -336,10 +353,12 @@
         function getFilmingDeadline(clientId) {
             const stats = getClientStats(clientId);
             const today = new Date();
+            today.setHours(0, 0, 0, 0);
             
             // Calculate when they need to film to maintain 5-day buffer
-            // Current coverage - 5 days (buffer) - 3 days (production time)
-            const daysUntilFilm = stats.coverageDays - 5 - 3;
+            // We need: 5 days buffer + 3 days production time = 8 days total
+            // So film when: coverage days - 8 <= 0
+            const daysUntilFilm = stats.coverageDays - 8;
             
             const filmBy = new Date(today);
             filmBy.setDate(filmBy.getDate() + Math.max(0, daysUntilFilm));
@@ -505,6 +524,148 @@
                                 <div class="text-3xl font-bold ${urgentClients.length > 0 ? 'text-red-600' : 'text-emerald-600'}">${urgentClients.length}</div>
                             </div>
                         </div>
+
+                        <!-- Quick Tools -->
+                        <div class="grid grid-cols-2 gap-4 mb-8">
+                            <button onclick="toggleCalendar()" class="bg-white rounded-xl shadow-sm p-6 border-2 ${data.showCalendar ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300'} text-left transition-all">
+                                <div class="flex items-center gap-3 mb-2">
+                                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                    <h3 class="text-lg font-bold text-slate-900">Calendar View</h3>
+                                </div>
+                                <p class="text-sm text-slate-600">See all filming sessions on a calendar</p>
+                            </button>
+                            <button onclick="toggleCalculator()" class="bg-white rounded-xl shadow-sm p-6 border-2 ${data.showCalculator ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300'} text-left transition-all">
+                                <div class="flex items-center gap-3 mb-2">
+                                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                                    <h3 class="text-lg font-bold text-slate-900">Coverage Calculator</h3>
+                                </div>
+                                <p class="text-sm text-slate-600">Calculate coverage from filming duration</p>
+                            </button>
+                        </div>
+
+                        <!-- Calendar View -->
+                        ${data.showCalendar ? `
+                            <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200 mb-8">
+                                <h2 class="text-xl font-bold text-slate-900 mb-4">Filming Sessions Calendar</h2>
+                                ${(() => {
+                                    const sessionsWithClients = data.sessions.map(s => {
+                                        const client = allClients.find(c => c.id === s.clientId);
+                                        return { ...s, clientName: client ? client.name : 'Unknown' };
+                                    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+                                    
+                                    if (sessionsWithClients.length === 0) {
+                                        return '<p class="text-slate-500 text-center py-8">No sessions recorded yet</p>';
+                                    }
+                                    
+                                    return `
+                                        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            ${sessionsWithClients.map(s => {
+                                                const videos = calculateSessionVideos(s.duration);
+                                                return `
+                                                    <div class="bg-slate-50 rounded-lg p-4 border ${s.materialReceived ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}">
+                                                        <div class="flex items-center gap-2 mb-2">
+                                                            <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                                            <span class="font-bold text-slate-900">${new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                                        </div>
+                                                        <div class="font-semibold text-slate-900 mb-1">${s.clientName}</div>
+                                                        <div class="text-sm text-slate-600 mb-2">${s.duration} min • ${videos} videos</div>
+                                                        <div class="flex items-center gap-2">
+                                                            ${s.materialReceived ? 
+                                                                '<span class="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-medium">✓ Material Received</span>' :
+                                                                '<span class="text-xs px-2 py-1 bg-amber-100 text-amber-700 rounded font-medium">⏳ Pending</span>'
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                `;
+                                            }).join('')}
+                                        </div>
+                                    `;
+                                })()}
+                            </div>
+                        ` : ''}
+
+                        <!-- Coverage Calculator -->
+                        ${data.showCalculator ? `
+                            <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200 mb-8">
+                                <h2 class="text-xl font-bold text-slate-900 mb-4">Coverage Calculator</h2>
+                                <div class="grid md:grid-cols-2 gap-6">
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Select Client</label>
+                                            <select id="calc-client" onchange="calculateCoverage()" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                                <option value="">Choose a client...</option>
+                                                ${allClients.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Filming Duration (minutes)</label>
+                                            <input type="number" id="calc-duration" placeholder="120" oninput="calculateCoverage()" 
+                                                class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        </div>
+                                        <div class="bg-blue-50 rounded-lg p-4 text-sm text-blue-800">
+                                            <strong>Formula:</strong> Every 10 minutes = 4 videos<br>
+                                            Videos ÷ Videos per day = Coverage days
+                                        </div>
+                                    </div>
+                                    <div id="calc-result">
+                                        <p class="text-slate-500 text-center py-12">Select a client and enter duration to see results</p>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        <!-- Auto-Schedule Suggestions -->
+                        ${(() => {
+                            const needFilming = allClients.map(c => ({
+                                ...c,
+                                deadline: getFilmingDeadline(c.id),
+                                stats: getClientStats(c.id)
+                            })).filter(c => c.deadline.isUrgent || c.deadline.isWarning)
+                               .sort((a, b) => a.deadline.daysLeft - b.deadline.daysLeft);
+                            
+                            if (needFilming.length === 0) return '';
+                            
+                            return `
+                                <div class="bg-gradient-to-r from-orange-50 to-amber-50 border-2 border-orange-200 rounded-xl p-6 mb-8">
+                                    <div class="flex items-center gap-3 mb-4">
+                                        <svg class="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                        <h2 class="text-2xl font-bold text-orange-900">Filming Schedule Recommendations</h2>
+                                    </div>
+                                    <p class="text-orange-800 mb-4">To maintain 5-day coverage buffer, film these clients soon:</p>
+                                    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        ${needFilming.map(c => `
+                                            <div class="bg-white rounded-lg p-4 border-2 ${c.deadline.isUrgent ? 'border-red-300' : 'border-orange-300'}">
+                                                <div class="flex items-start justify-between mb-2">
+                                                    <div>
+                                                        <div class="font-bold text-lg text-slate-900">${c.name}</div>
+                                                        <div class="text-sm text-slate-600">${c.managerName}</div>
+                                                    </div>
+                                                    ${c.deadline.isUrgent ? 
+                                                        '<span class="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded">URGENT</span>' :
+                                                        '<span class="px-2 py-1 bg-orange-100 text-orange-700 text-xs font-bold rounded">SOON</span>'
+                                                    }
+                                                </div>
+                                                <div class="text-sm space-y-1">
+                                                    <div class="flex justify-between">
+                                                        <span class="text-slate-600">Current Coverage:</span>
+                                                        <span class="font-bold">${c.stats.coverageDays} days</span>
+                                                    </div>
+                                                    <div class="flex justify-between">
+                                                        <span class="text-slate-600">Days Until Film:</span>
+                                                        <span class="font-bold ${c.deadline.isUrgent ? 'text-red-600' : 'text-orange-600'}">${c.deadline.daysLeft} days</span>
+                                                    </div>
+                                                    <div class="pt-2 border-t">
+                                                        <div class="font-bold ${c.deadline.isUrgent ? 'text-red-600' : 'text-orange-600'}">
+                                                            ${c.deadline.isUrgent ? '🚨 Film NOW!' : `📅 Film by ${c.deadline.filmBy}`}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            `;
+                        })()}
 
                         <!-- Alerts Dashboard -->
                         ${urgentClients.length > 0 ? `
