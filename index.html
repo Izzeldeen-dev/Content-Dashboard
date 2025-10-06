@@ -46,7 +46,8 @@
             sessions: [],
             syncing: false,
             addingSession: false,
-            searchQuery: ''
+            searchQuery: '',
+            editingClientId: null
         };
 
         let isDrawing = false;
@@ -203,6 +204,46 @@
             draw();
         }
 
+        function startEditVideosPerDay(clientId) {
+            data.editingClientId = clientId;
+            draw();
+        }
+
+        function cancelEditVideosPerDay() {
+            data.editingClientId = null;
+            draw();
+        }
+
+        function saveVideosPerDay(clientId) {
+            const input = document.getElementById(`vpd-${clientId}`);
+            const newValue = parseInt(input.value);
+            
+            if (!newValue || newValue < 1) {
+                alert('Please enter a valid number');
+                return;
+            }
+
+            // Find the client in managers and update
+            let updated = false;
+            data.managers.forEach(mgr => {
+                if (mgr.clients && Array.isArray(mgr.clients)) {
+                    const client = mgr.clients.find(c => c.id === clientId);
+                    if (client) {
+                        client.videosPerDay = newValue;
+                        updated = true;
+                    }
+                }
+            });
+
+            if (updated) {
+                data.editingClientId = null;
+                // Save managers to Firebase
+                db.ref('managers').set(data.managers).then(() => {
+                    draw();
+                });
+            }
+        }
+
         // Filter clients
         function filterClients(clients) {
             if (!data.searchQuery) return clients;
@@ -341,15 +382,36 @@
                                                     <tr class="hover:bg-slate-50 fade-in">
                                                         <td class="px-6 py-4">
                                                             <div class="font-semibold text-slate-900">${client.name}</div>
-                                                            <button onclick="toggleClientSessions(${client.id})" class="text-xs text-purple-600 hover:text-purple-800 mt-1">
+                                                            <button onclick="viewClientDetails(${client.id})" class="text-xs text-purple-600 hover:text-purple-800 mt-1">
                                                                 View Sessions (${sessions.length})
                                                             </button>
                                                         </td>
                                                         <td class="px-6 py-4 text-slate-700">${client.managerName}</td>
                                                         <td class="px-6 py-4 text-center">
-                                                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
-                                                                ${stats.videosPerDay}
-                                                            </span>
+                                                            ${data.editingClientId === client.id ? `
+                                                                <div class="flex items-center justify-center gap-2">
+                                                                    <input type="number" id="vpd-${client.id}" value="${stats.videosPerDay}" 
+                                                                        class="w-16 px-2 py-1 border border-purple-300 rounded text-center focus:ring-2 focus:ring-purple-500">
+                                                                    <button onclick="saveVideosPerDay(${client.id})" 
+                                                                        class="p-1 text-green-600 hover:bg-green-50 rounded" title="Save">
+                                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                                                    </button>
+                                                                    <button onclick="cancelEditVideosPerDay()" 
+                                                                        class="p-1 text-red-600 hover:bg-red-50 rounded" title="Cancel">
+                                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                                                    </button>
+                                                                </div>
+                                                            ` : `
+                                                                <div class="flex items-center justify-center gap-2">
+                                                                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
+                                                                        ${stats.videosPerDay}
+                                                                    </span>
+                                                                    <button onclick="startEditVideosPerDay(${client.id})" 
+                                                                        class="p-1 text-purple-600 hover:bg-purple-50 rounded" title="Edit">
+                                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                                                    </button>
+                                                                </div>
+                                                            `}
                                                         </td>
                                                         <td class="px-6 py-4 text-center">
                                                             <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-slate-100 text-slate-800">
