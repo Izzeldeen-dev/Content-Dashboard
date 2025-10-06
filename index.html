@@ -59,7 +59,9 @@
             editingClientId: null,
             statusFilter: 'all', // all, urgent, good
             sortBy: null,
-            sortDir: 'asc'
+            sortDir: 'asc',
+            showCalendar: false,
+            showCalculator: false
         };
 
         let isDrawing = false;
@@ -264,6 +266,90 @@
                     draw();
                 });
             }
+        }
+
+        function toggleCalendar() {
+            data.showCalendar = !data.showCalendar;
+            draw();
+        }
+
+        function toggleCalculator() {
+            data.showCalculator = !data.showCalculator;
+            draw();
+        }
+
+        function calculateCoverage() {
+            const clientSelect = document.getElementById('calc-client');
+            const durationInput = document.getElementById('calc-duration');
+            
+            if (!clientSelect || !durationInput) return;
+            
+            const clientId = parseInt(clientSelect.value);
+            const duration = parseInt(durationInput.value);
+            
+            if (!clientId || !duration) {
+                document.getElementById('calc-result').innerHTML = '<p class="text-slate-500">Please select a client and enter duration</p>';
+                return;
+            }
+            
+            const client = getAllClients().find(c => c.id === clientId);
+            if (!client) return;
+            
+            const stats = getClientStats(clientId);
+            const newVideos = calculateSessionVideos(duration);
+            const newCoverageDays = Math.floor((stats.totalVideos + newVideos) / stats.videosPerDay);
+            
+            const today = new Date();
+            const newCoverageUntil = new Date(today);
+            newCoverageUntil.setDate(newCoverageUntil.getDate() + 3 + newCoverageDays);
+            
+            document.getElementById('calc-result').innerHTML = `
+                <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-200">
+                    <h4 class="font-bold text-purple-900 mb-3">Calculation Results:</h4>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-slate-700">New Videos:</span>
+                            <span class="font-bold text-slate-900">+${newVideos} videos</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-700">Current Coverage:</span>
+                            <span class="font-medium text-slate-900">${stats.coverageDays} days</span>
+                        </div>
+                        <div class="flex justify-between border-t pt-2">
+                            <span class="text-slate-700">New Coverage:</span>
+                            <span class="font-bold text-purple-600 text-lg">${newCoverageDays} days</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-700">Coverage Until:</span>
+                            <span class="font-bold text-purple-600">${newCoverageUntil.toLocaleDateString()}</span>
+                        </div>
+                        <div class="flex justify-between border-t pt-2">
+                            <span class="text-slate-700">Extension:</span>
+                            <span class="font-bold text-emerald-600 text-lg">+${newCoverageDays - stats.coverageDays} days</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Get filming deadline for client
+        function getFilmingDeadline(clientId) {
+            const stats = getClientStats(clientId);
+            const today = new Date();
+            
+            // Calculate when they need to film to maintain 5-day buffer
+            // Current coverage - 5 days (buffer) - 3 days (production time)
+            const daysUntilFilm = stats.coverageDays - 5 - 3;
+            
+            const filmBy = new Date(today);
+            filmBy.setDate(filmBy.getDate() + Math.max(0, daysUntilFilm));
+            
+            return {
+                filmBy: filmBy.toLocaleDateString(),
+                daysLeft: Math.max(0, daysUntilFilm),
+                isUrgent: daysUntilFilm <= 0,
+                isWarning: daysUntilFilm > 0 && daysUntilFilm <= 3
+            };
         }
 
         // Filter clients
