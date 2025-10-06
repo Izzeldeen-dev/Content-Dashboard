@@ -144,19 +144,26 @@
             const totalVideos = clientSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
             const coverageDays = Math.floor(totalVideos / videosPerDay);
             
-            // Calculate coverage until date
-            // Material received = ready to post, so coverage starts today
-            // Coverage until = today + coverage days
-            const today = new Date();
-            today.setHours(0, 0, 0, 0); // Reset to start of day
-            const coverageUntil = new Date(today);
-            coverageUntil.setDate(coverageUntil.getDate() + coverageDays);
+            // Find the most recent session date (when material was received)
+            let latestSessionDate = new Date();
+            latestSessionDate.setHours(0, 0, 0, 0);
+            
+            if (clientSessions.length > 0) {
+                const sessionDates = clientSessions.map(s => new Date(s.date));
+                latestSessionDate = new Date(Math.max(...sessionDates));
+                latestSessionDate.setHours(0, 0, 0, 0);
+            }
+            
+            // Calculate coverage until: Latest session date + 3 days production + coverage days
+            const coverageUntil = new Date(latestSessionDate);
+            coverageUntil.setDate(coverageUntil.getDate() + 3 + coverageDays);
             
             return {
                 sessionCount: clientSessions.length,
                 totalVideos,
                 coverageDays,
                 videosPerDay,
+                latestSessionDate: latestSessionDate.toLocaleDateString(),
                 coverageUntil: coverageUntil.toLocaleDateString(),
                 coverageUntilDate: coverageUntil,
                 isLowCoverage: coverageDays < 5
@@ -301,21 +308,27 @@
             
             const stats = getClientStats(clientId);
             const newVideos = calculateSessionVideos(duration);
-            const newCoverageDays = Math.floor((stats.totalVideos + newVideos) / stats.videosPerDay);
+            const totalVideosAfter = stats.totalVideos + newVideos;
+            const newCoverageDays = Math.floor(totalVideosAfter / stats.videosPerDay);
             
-            // New material needs 3 days production time
+            // If filming today, session date = today
+            // Coverage until = today + 3 days production + new total coverage days
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const readyDate = new Date(today);
             readyDate.setDate(readyDate.getDate() + 3);
             
-            const newCoverageUntil = new Date(readyDate);
-            newCoverageUntil.setDate(newCoverageUntil.getDate() + newCoverageDays);
+            const newCoverageUntil = new Date(today);
+            newCoverageUntil.setDate(newCoverageUntil.getDate() + 3 + newCoverageDays);
             
             document.getElementById('calc-result').innerHTML = `
                 <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-200">
-                    <h4 class="font-bold text-purple-900 mb-3">Calculation Results:</h4>
+                    <h4 class="font-bold text-purple-900 mb-3">If you film today:</h4>
                     <div class="space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-slate-700">Session Date:</span>
+                            <span class="font-bold text-slate-900">${today.toLocaleDateString()}</span>
+                        </div>
                         <div class="flex justify-between">
                             <span class="text-slate-700">New Videos:</span>
                             <span class="font-bold text-slate-900">+${newVideos} videos</span>
@@ -330,15 +343,15 @@
                         </div>
                         <div class="flex justify-between border-t pt-2">
                             <span class="text-slate-700">Current Coverage:</span>
-                            <span class="font-medium text-slate-900">${stats.coverageDays} days</span>
+                            <span class="font-medium text-slate-900">${stats.coverageDays} days (until ${stats.coverageUntil})</span>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-slate-700">New Total Coverage:</span>
                             <span class="font-bold text-purple-600 text-lg">${newCoverageDays} days</span>
                         </div>
-                        <div class="flex justify-between border-t pt-2">
-                            <span class="text-slate-700">Coverage Until:</span>
-                            <span class="font-bold text-purple-600">${newCoverageUntil.toLocaleDateString()}</span>
+                        <div class="flex justify-between border-t pt-2 bg-white rounded p-2">
+                            <span class="text-slate-700 font-bold">Coverage Until:</span>
+                            <span class="font-bold text-purple-600 text-lg">${newCoverageUntil.toLocaleDateString()}</span>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-slate-700">Extension:</span>
@@ -355,10 +368,11 @@
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             
-            // Calculate when they need to film to maintain 5-day buffer
-            // We need: 5 days buffer + 3 days production time = 8 days total
-            // So film when: coverage days - 8 <= 0
-            const daysUntilFilm = stats.coverageDays - 8;
+            // Coverage runs out on coverageUntilDate
+            // We want 5-day buffer, so film when: (coverageUntilDate - today) <= 5 + 3
+            // The +3 is because filming today takes 3 days to produce
+            const daysUntilCoverageEnds = Math.floor((stats.coverageUntilDate - today) / (1000 * 60 * 60 * 24));
+            const daysUntilFilm = daysUntilCoverageEnds - 8; // 5 day buffer + 3 day production
             
             const filmBy = new Date(today);
             filmBy.setDate(filmBy.getDate() + Math.max(0, daysUntilFilm));
@@ -926,6 +940,10 @@
                                 <div class="text-xs font-medium text-slate-600 mb-1">Until</div>
                                 <div class="text-lg font-bold text-slate-900">${stats.coverageUntil}</div>
                             </div>
+                        </div>
+                        
+                        <div class="bg-blue-50 rounded-lg p-4 mb-6 text-sm">
+                            <strong>Calculation:</strong> Latest session (${stats.latestSessionDate}) + 3 days production + ${stats.coverageDays} days coverage = ${stats.coverageUntil}
                         </div>
 
                         <!-- Sessions List -->
