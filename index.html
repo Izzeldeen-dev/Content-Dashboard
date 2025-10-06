@@ -7,12 +7,21 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         .fade-in { animation: fadeIn 0.3s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
         .animate-spin { animation: spin 1s linear infinite; }
         * { transition: background-color 0.2s, border-color 0.2s; }
+        .row-urgent { background-color: #fee2e2 !important; }
+        .row-urgent:hover { background-color: #fecaca !important; }
+        .row-good { background-color: #d1fae5 !important; }
+        .row-good:hover { background-color: #a7f3d0 !important; }
+        .sortable { cursor: pointer; user-select: none; }
+        .sortable:hover { background-color: #e2e8f0; }
+        .sort-asc::after { content: " ▲"; }
+        .sort-desc::after { content: " ▼"; }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -47,10 +56,14 @@
             syncing: false,
             addingSession: false,
             searchQuery: '',
-            editingClientId: null
+            editingClientId: null,
+            statusFilter: 'all', // all, urgent, good
+            sortBy: null,
+            sortDir: 'asc'
         };
 
         let isDrawing = false;
+        let coverageChart = null;
 
         // Save
         function save() {
@@ -75,7 +88,6 @@
             db.ref('managers').once('value'),
             db.ref('sessions').once('value')
         ]).then(([managersSnap, sessionsSnap]) => {
-            // Load managers
             if (managersSnap.exists()) {
                 let managersData = managersSnap.val();
                 if (!Array.isArray(managersData)) {
@@ -84,7 +96,6 @@
                 data.managers = managersData;
             }
 
-            // Load sessions
             if (sessionsSnap.exists()) {
                 let sessionsData = sessionsSnap.val();
                 if (!Array.isArray(sessionsData)) {
@@ -119,9 +130,7 @@
             return clients;
         }
 
-        // Calculate session stats
         function calculateSessionVideos(durationMinutes) {
-            // Every 10 min = 4 videos
             return Math.floor(durationMinutes / 10) * 4;
         }
 
@@ -133,7 +142,6 @@
             const totalVideos = clientSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
             const coverageDays = Math.floor(totalVideos / videosPerDay);
             
-            // Calculate coverage until date (today + 3 days production + coverage days)
             const today = new Date();
             const coverageUntil = new Date(today);
             coverageUntil.setDate(coverageUntil.getDate() + 3 + coverageDays);
@@ -144,6 +152,7 @@
                 coverageDays,
                 videosPerDay,
                 coverageUntil: coverageUntil.toLocaleDateString(),
+                coverageUntilDate: coverageUntil,
                 isLowCoverage: coverageDays < 5
             };
         }
@@ -204,6 +213,21 @@
             draw();
         }
 
+        function setStatusFilter(filter) {
+            data.statusFilter = filter;
+            draw();
+        }
+
+        function sortBy(field) {
+            if (data.sortBy === field) {
+                data.sortDir = data.sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                data.sortBy = field;
+                data.sortDir = 'asc';
+            }
+            draw();
+        }
+
         function startEditVideosPerDay(clientId) {
             data.editingClientId = clientId;
             draw();
@@ -223,7 +247,6 @@
                 return;
             }
 
-            // Find the client in managers and update
             let updated = false;
             data.managers.forEach(mgr => {
                 if (mgr.clients && Array.isArray(mgr.clients)) {
@@ -237,7 +260,6 @@
 
             if (updated) {
                 data.editingClientId = null;
-                // Save managers to Firebase
                 db.ref('managers').set(data.managers).then(() => {
                     draw();
                 });
@@ -246,14 +268,109 @@
 
         // Filter clients
         function filterClients(clients) {
-            if (!data.searchQuery) return clients;
-            return clients.filter(c => 
-                c.name.toLowerCase().includes(data.searchQuery) ||
-                c.managerName.toLowerCase().includes(data.searchQuery)
-            );
+            let filtered = clients;
+            
+            // Search filter
+            if (data.searchQuery) {
+                filtered = filtered.filter(c => 
+                    c.name.toLowerCase().includes(data.searchQuery) ||
+                    c.managerName.toLowerCase().includes(data.searchQuery)
+                );
+            }
+
+            // Status filter
+            if (data.statusFilter !== 'all') {
+                filtered = filtered.filter(c => {
+                    const stats = getClientStats(c.id);
+                    if (data.statusFilter === 'urgent') return stats.isLowCoverage;
+                    if (data.statusFilter === 'good') return !stats.isLowCoverage;
+                    return true;
+                });
+            }
+
+            // Sort
+            if (data.sortBy) {
+                filtered.sort((a, b) => {
+                    const statsA = getClientStats(a.id);
+                    const statsB = getClientStats(b.id);
+                    
+                    let valA, valB;
+                    switch(data.sortBy) {
+                        case 'name': valA = a.name; valB = b.name; break;
+                        case 'manager': valA = a.managerName; valB = b.managerName; break;
+                        case 'sessions': valA = statsA.sessionCount; valB = statsB.sessionCount; break;
+                        case 'videos': valA = statsA.totalVideos; valB = statsB.totalVideos; break;
+                        case 'coverage': valA = statsA.coverageDays; valB = statsB.coverageDays; break;
+                        case 'until': valA = statsA.coverageUntilDate; valB = statsB.coverageUntilDate; break;
+                        default: return 0;
+                    }
+                    
+                    if (valA < valB) return data.sortDir === 'asc' ? -1 : 1;
+                    if (valA > valB) return data.sortDir === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            }
+
+            return filtered;
         }
 
-        // Draw
+        // Draw coverage chart
+        function drawChart(clients) {
+            const ctx = document.getElementById('coverageChart');
+            if (!ctx) return;
+
+            const chartData = clients.slice(0, 10).map(client => {
+                const stats = getClientStats(client.id);
+                return {
+                    name: client.name,
+                    coverage: stats.coverageDays,
+                    isLow: stats.isLowCoverage
+                };
+            });
+
+            if (coverageChart) {
+                coverageChart.destroy();
+            }
+
+            coverageChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: chartData.map(d => d.name),
+                    datasets: [{
+                        label: 'Coverage Days',
+                        data: chartData.map(d => d.coverage),
+                        backgroundColor: chartData.map(d => d.isLow ? '#ef4444' : '#10b981'),
+                        borderColor: chartData.map(d => d.isLow ? '#dc2626' : '#059669'),
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => `${context.parsed.y} days coverage`
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: '#e2e8f0' },
+                            ticks: { color: '#64748b' }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#64748b' }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Draw UI
         function draw() {
             if (isDrawing) return;
             isDrawing = true;
@@ -261,10 +378,9 @@
             const allClients = getAllClients();
             const filtered = filterClients(allClients);
 
-            // Calculate overall stats
             const totalSessions = data.sessions.length;
             const totalMaterialReceived = data.sessions.filter(s => s.materialReceived).length;
-            const clientsWithLowCoverage = filtered.filter(c => getClientStats(c.id).isLowCoverage).length;
+            const urgentClients = allClients.filter(c => getClientStats(c.id).isLowCoverage);
 
             document.getElementById('app').innerHTML = `
                 <div class="min-h-screen bg-gradient-to-br from-slate-50 via-purple-50 to-slate-100">
@@ -300,15 +416,69 @@
                             </div>
                             <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200">
                                 <div class="text-sm font-medium text-slate-600 mb-1">Low Coverage Alerts</div>
-                                <div class="text-3xl font-bold ${clientsWithLowCoverage > 0 ? 'text-red-600' : 'text-emerald-600'}">${clientsWithLowCoverage}</div>
+                                <div class="text-3xl font-bold ${urgentClients.length > 0 ? 'text-red-600' : 'text-emerald-600'}">${urgentClients.length}</div>
                             </div>
                         </div>
 
-                        <!-- Search & Add -->
+                        <!-- Alerts Dashboard -->
+                        ${urgentClients.length > 0 ? `
+                            <div class="bg-red-50 border-2 border-red-200 rounded-xl p-6 mb-8">
+                                <div class="flex items-center gap-3 mb-4">
+                                    <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                    <h2 class="text-2xl font-bold text-red-900">Urgent: ${urgentClients.length} Client${urgentClients.length > 1 ? 's' : ''} Running Low!</h2>
+                                </div>
+                                <div class="grid md:grid-cols-2 gap-4">
+                                    ${urgentClients.map(client => {
+                                        const stats = getClientStats(client.id);
+                                        return `
+                                            <div class="bg-white rounded-lg p-4 border-2 border-red-300">
+                                                <div class="flex justify-between items-start mb-2">
+                                                    <div>
+                                                        <div class="font-bold text-lg text-slate-900">${client.name}</div>
+                                                        <div class="text-sm text-slate-600">${client.managerName}</div>
+                                                    </div>
+                                                    <div class="text-right">
+                                                        <div class="text-2xl font-bold text-red-600">${stats.coverageDays}</div>
+                                                        <div class="text-xs text-slate-600">days left</div>
+                                                    </div>
+                                                </div>
+                                                <div class="text-sm text-red-700 font-medium">⚠️ Coverage ends: ${stats.coverageUntil}</div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        <!-- Coverage Chart -->
+                        <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200 mb-8">
+                            <h2 class="text-xl font-bold text-slate-900 mb-4">Coverage Overview (Top 10 Clients)</h2>
+                            <div style="height: 300px;">
+                                <canvas id="coverageChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Search & Filters -->
                         <div class="flex gap-4 mb-6">
                             <input type="text" placeholder="Search clients or managers..." 
                                 oninput="updateSearch(this.value)" value="${data.searchQuery}"
                                 class="flex-1 px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
+                            
+                            <div class="flex gap-2">
+                                <button onclick="setStatusFilter('all')" 
+                                    class="px-4 py-3 rounded-lg font-medium ${data.statusFilter === 'all' ? 'bg-purple-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'}">
+                                    All (${allClients.length})
+                                </button>
+                                <button onclick="setStatusFilter('urgent')" 
+                                    class="px-4 py-3 rounded-lg font-medium ${data.statusFilter === 'urgent' ? 'bg-red-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'}">
+                                    Urgent (${urgentClients.length})
+                                </button>
+                                <button onclick="setStatusFilter('good')" 
+                                    class="px-4 py-3 rounded-lg font-medium ${data.statusFilter === 'good' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'}">
+                                    Good (${allClients.length - urgentClients.length})
+                                </button>
+                            </div>
+
                             <button onclick="showAddSession()"
                                 class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium flex items-center gap-2">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
@@ -360,13 +530,13 @@
                                 <table class="w-full">
                                     <thead class="bg-slate-50 border-b border-slate-200">
                                         <tr>
-                                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Client</th>
-                                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Account Manager</th>
+                                            <th onclick="sortBy('name')" class="sortable px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'name' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Client</th>
+                                            <th onclick="sortBy('manager')" class="sortable px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'manager' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Manager</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Videos/Day</th>
-                                            <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Sessions</th>
-                                            <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Total Videos</th>
-                                            <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Coverage Days</th>
-                                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Coverage Until</th>
+                                            <th onclick="sortBy('sessions')" class="sortable px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'sessions' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Sessions</th>
+                                            <th onclick="sortBy('videos')" class="sortable px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'videos' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Videos</th>
+                                            <th onclick="sortBy('coverage')" class="sortable px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'coverage' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Coverage</th>
+                                            <th onclick="sortBy('until')" class="sortable px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'until' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Until</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Status</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
                                         </tr>
@@ -377,9 +547,10 @@
                                             filtered.map(client => {
                                                 const stats = getClientStats(client.id);
                                                 const sessions = data.sessions.filter(s => s.clientId === client.id);
+                                                const rowClass = stats.isLowCoverage ? 'row-urgent' : 'row-good';
                                                 
                                                 return `
-                                                    <tr class="hover:bg-slate-50 fade-in">
+                                                    <tr class="${rowClass} fade-in">
                                                         <td class="px-6 py-4">
                                                             <div class="font-semibold text-slate-900">${client.name}</div>
                                                             <button onclick="viewClientDetails(${client.id})" class="text-xs text-purple-600 hover:text-purple-800 mt-1">
@@ -421,10 +592,16 @@
                                                         <td class="px-6 py-4 text-center">
                                                             <span class="text-lg font-bold text-slate-900">${stats.totalVideos}</span>
                                                         </td>
-                                                        <td class="px-6 py-4 text-center">
-                                                            <span class="text-lg font-bold ${stats.isLowCoverage ? 'text-red-600' : 'text-emerald-600'}">
-                                                                ${stats.coverageDays}
-                                                            </span>
+                                                        <td class="px-6 py-4">
+                                                            <div class="flex flex-col gap-1">
+                                                                <span class="text-lg font-bold ${stats.isLowCoverage ? 'text-red-600' : 'text-emerald-600'}">
+                                                                    ${stats.coverageDays} days
+                                                                </span>
+                                                                <div class="w-full bg-slate-200 rounded-full h-2">
+                                                                    <div class="${stats.isLowCoverage ? 'bg-red-500' : 'bg-emerald-500'} h-2 rounded-full" 
+                                                                        style="width: ${Math.min(stats.coverageDays * 10, 100)}%"></div>
+                                                                </div>
+                                                            </div>
                                                         </td>
                                                         <td class="px-6 py-4 text-slate-700">${stats.coverageUntil}</td>
                                                         <td class="px-6 py-4 text-center">
@@ -436,7 +613,7 @@
                                                         <td class="px-6 py-4 text-center">
                                                             <button onclick="viewClientDetails(${client.id})" 
                                                                 class="text-purple-600 hover:text-purple-800 font-medium text-sm">
-                                                                View Details
+                                                                Details
                                                             </button>
                                                         </td>
                                                     </tr>
@@ -452,9 +629,12 @@
             `;
 
             isDrawing = false;
+            
+            // Draw chart after DOM update
+            setTimeout(() => drawChart(filtered), 100);
         }
 
-        // View client details (expand sessions)
+        // View client details
         function viewClientDetails(clientId) {
             const client = getAllClients().find(c => c.id === clientId);
             if (!client) return;
@@ -518,7 +698,7 @@
                                                 </div>
                                                 <label class="flex items-center gap-2 cursor-pointer">
                                                     <input type="checkbox" ${session.materialReceived ? 'checked' : ''} 
-                                                        onchange="toggleMaterial(${session.id})"
+                                                        onchange="toggleMaterial(${session.id}); setTimeout(() => this.closest('.fixed').remove(), 100);"
                                                         class="w-4 h-4 text-purple-600 rounded">
                                                     <span class="text-sm text-slate-600">Material Received</span>
                                                 </label>
