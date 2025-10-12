@@ -711,6 +711,112 @@
                             </div>
                         ` : ''}
 
+                        <!-- ONE Unified Action Required Table -->
+                        ${(() => {
+                            // Get all clients that need attention (urgent OR need filming soon)
+                            const actionRequired = allClients.map(c => {
+                                const stats = getClientStats(c.id);
+                                const deadline = getFilmingDeadline(c.id);
+                                return {
+                                    ...c,
+                                    stats,
+                                    deadline,
+                                    needsAction: stats.isLowCoverage || deadline.isUrgent || deadline.isWarning
+                                };
+                            }).filter(c => c.needsAction)
+                               .sort((a, b) => {
+                                   // Sort by urgency: urgent coverage first, then by days left
+                                   if (a.stats.isLowCoverage && !b.stats.isLowCoverage) return -1;
+                                   if (!a.stats.isLowCoverage && b.stats.isLowCoverage) return 1;
+                                   return a.stats.coverageDays - b.stats.coverageDays;
+                               });
+                            
+                            if (actionRequired.length === 0) return '';
+                            
+                            const urgentCount = actionRequired.filter(c => c.stats.isLowCoverage || c.deadline.isUrgent).length;
+                            const soonCount = actionRequired.length - urgentCount;
+                            
+                            return `
+                                <div class="bg-white rounded-xl shadow-lg border-2 border-red-200 overflow-hidden mb-8">
+                                    <div class="bg-gradient-to-r from-red-500 to-orange-500 text-white p-6">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-3">
+                                                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                                <div>
+                                                    <h2 class="text-2xl font-bold">⚠️ Action Required: ${actionRequired.length} Client${actionRequired.length > 1 ? 's' : ''}</h2>
+                                                    <p class="text-white/90 mt-1">
+                                                        ${urgentCount > 0 ? `🔴 ${urgentCount} Urgent` : ''} 
+                                                        ${urgentCount > 0 && soonCount > 0 ? ' • ' : ''}
+                                                        ${soonCount > 0 ? `🟠 ${soonCount} Need Filming Soon` : ''}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="overflow-x-auto">
+                                        <table class="w-full">
+                                            <thead class="bg-slate-50 border-b-2 border-slate-200">
+                                                <tr>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Priority</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Client</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Manager</th>
+                                                    <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase">Coverage</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Coverage Until</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Film By</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Reason</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-slate-200">
+                                                ${actionRequired.map(client => {
+                                                    const isUrgent = client.stats.isLowCoverage || client.deadline.isUrgent;
+                                                    const priorityLabel = isUrgent ? 'URGENT' : 'SOON';
+                                                    const rowClass = isUrgent ? 'bg-red-50' : 'bg-orange-50';
+                                                    
+                                                    return `
+                                                        <tr class="${rowClass} hover:opacity-90">
+                                                            <td class="px-6 py-4">
+                                                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold ${isUrgent ? 'bg-red-600 text-white' : 'bg-orange-500 text-white'}">
+                                                                    ${isUrgent ? '🔴' : '🟠'} ${priorityLabel}
+                                                                </span>
+                                                            </td>
+                                                            <td class="px-6 py-4">
+                                                                <div class="font-bold text-slate-900">${client.name}</div>
+                                                                <button onclick="viewClientDetails(${client.id})" class="text-xs text-purple-600 hover:text-purple-800 mt-1">
+                                                                    View Details
+                                                                </button>
+                                                            </td>
+                                                            <td class="px-6 py-4 text-slate-700">${client.managerName}</td>
+                                                            <td class="px-6 py-4 text-center">
+                                                                <div class="font-bold text-2xl ${client.stats.isLowCoverage ? 'text-red-600' : 'text-orange-600'}">
+                                                                    ${client.stats.coverageDays}
+                                                                </div>
+                                                                <div class="text-xs text-slate-600">days</div>
+                                                            </td>
+                                                            <td class="px-6 py-4">
+                                                                <div class="font-semibold text-slate-900">${client.stats.coverageUntil}</div>
+                                                            </td>
+                                                            <td class="px-6 py-4">
+                                                                <div class="font-bold ${isUrgent ? 'text-red-600' : 'text-orange-600'}">
+                                                                    ${client.deadline.isUrgent ? '🚨 NOW!' : client.deadline.filmBy}
+                                                                </div>
+                                                                ${!client.deadline.isUrgent ? `<div class="text-xs text-slate-600 mt-1">${client.deadline.daysLeft} days</div>` : ''}
+                                                            </td>
+                                                            <td class="px-6 py-4">
+                                                                ${client.stats.isLowCoverage ? 
+                                                                    '<div class="text-sm font-medium text-red-700">⚠️ Low coverage (<5 days)</div>' :
+                                                                    '<div class="text-sm font-medium text-orange-700">📅 Film soon to maintain buffer</div>'
+                                                                }
+                                                            </td>
+                                                        </tr>
+                                                    `;
+                                                }).join('')}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            `;
+                        })()}
+
                         <!-- Coverage Chart -->
                         <div class="bg-white rounded-xl shadow-sm p-6 border border-slate-200 mb-8">
                             <h2 class="text-xl font-bold text-slate-900 mb-4">Coverage Overview (Top 10 Clients)</h2>
