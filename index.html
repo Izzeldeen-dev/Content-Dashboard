@@ -154,9 +154,9 @@
                 latestSessionDate.setHours(0, 0, 0, 0);
             }
             
-            // Calculate coverage until: Latest session date + 3 days production + coverage days
+            // Calculate coverage until: Latest session date + 10 days production + coverage days
             const coverageUntil = new Date(latestSessionDate);
-            coverageUntil.setDate(coverageUntil.getDate() + 3 + coverageDays);
+            coverageUntil.setDate(coverageUntil.getDate() + 10 + coverageDays);
             
             return {
                 sessionCount: clientSessions.length,
@@ -312,14 +312,14 @@
             const newCoverageDays = Math.floor(totalVideosAfter / stats.videosPerDay);
             
             // If filming today, session date = today
-            // Coverage until = today + 3 days production + new total coverage days
+            // Coverage until = today + 10 days production + new total coverage days
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const readyDate = new Date(today);
-            readyDate.setDate(readyDate.getDate() + 3);
+            readyDate.setDate(readyDate.getDate() + 10);
             
             const newCoverageUntil = new Date(today);
-            newCoverageUntil.setDate(newCoverageUntil.getDate() + 3 + newCoverageDays);
+            newCoverageUntil.setDate(newCoverageUntil.getDate() + 10 + newCoverageDays);
             
             document.getElementById('calc-result').innerHTML = `
                 <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-200">
@@ -335,7 +335,7 @@
                         </div>
                         <div class="flex justify-between">
                             <span class="text-slate-700">Production Time:</span>
-                            <span class="font-medium text-slate-900">3 days</span>
+                            <span class="font-medium text-slate-900">10 days</span>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-slate-700">Ready to Post:</span>
@@ -369,10 +369,10 @@
             today.setHours(0, 0, 0, 0);
             
             // Coverage runs out on coverageUntilDate
-            // We want 5-day buffer, so film when: (coverageUntilDate - today) <= 5 + 3
-            // The +3 is because filming today takes 3 days to produce
+            // We want 5-day buffer, so film when: (coverageUntilDate - today) <= 5 + 10
+            // The +10 is because filming today takes 10 days to produce
             const daysUntilCoverageEnds = Math.floor((stats.coverageUntilDate - today) / (1000 * 60 * 60 * 24));
-            const daysUntilFilm = daysUntilCoverageEnds - 8; // 5 day buffer + 3 day production
+            const daysUntilFilm = daysUntilCoverageEnds - 15; // 5 day buffer + 10 day production
             
             const filmBy = new Date(today);
             filmBy.setDate(filmBy.getDate() + Math.max(0, daysUntilFilm));
@@ -966,7 +966,7 @@
                         </div>
                         
                         <div class="bg-blue-50 rounded-lg p-4 mb-6 text-sm">
-                            <strong>Calculation:</strong> Latest session (${stats.latestSessionDate}) + 3 days production + ${stats.coverageDays} days coverage = ${stats.coverageUntil}
+                            <strong>Calculation:</strong> Latest session (${stats.latestSessionDate}) + 10 days production + ${stats.coverageDays} days coverage = ${stats.coverageUntil}
                         </div>
 
                         <!-- Sessions List -->
