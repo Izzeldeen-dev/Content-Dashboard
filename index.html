@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Content Production Tracker</title>
+    <title>Content Production Tracker v2.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
@@ -18,6 +18,8 @@
         .row-urgent:hover { background-color: #fecaca !important; }
         .row-good { background-color: #d1fae5 !important; }
         .row-good:hover { background-color: #a7f3d0 !important; }
+        .row-prelunch { background-color: #dbeafe !important; }
+        .row-prelunch:hover { background-color: #bfdbfe !important; }
         .sortable { cursor: pointer; user-select: none; }
         .sortable:hover { background-color: #e2e8f0; }
         .sort-asc::after { content: " ▲"; }
@@ -29,7 +31,7 @@
         <div class="flex items-center justify-center min-h-screen">
             <div class="text-center">
                 <div class="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                <p class="text-slate-600">Loading Content Tracker...</p>
+                <p class="text-slate-600">Loading Content Tracker v2.0...</p>
             </div>
         </div>
     </div>
@@ -57,7 +59,8 @@
             addingSession: false,
             searchQuery: '',
             editingClientId: null,
-            statusFilter: 'all', // all, urgent, good
+            editingKickoffId: null,
+            statusFilter: 'all',
             sortBy: null,
             sortDir: 'asc',
             showCalendar: false,
@@ -124,7 +127,8 @@
                             name: client.name,
                             managerName: mgr.name,
                             managerId: mgr.id,
-                            videosPerDay: client.videosPerDay || 6
+                            videosPerDay: client.videosPerDay || 6,
+                            kickoffDate: client.kickoffDate || null
                         });
                     });
                 }
@@ -132,42 +136,93 @@
             return clients;
         }
 
+        // CHANGED: Every 10 mins = 2 videos (was 4)
         function calculateSessionVideos(durationMinutes) {
-            return Math.floor(durationMinutes / 10) * 4;
+            return Math.floor(durationMinutes / 10) * 2;
         }
 
         function getClientStats(clientId) {
             const client = getAllClients().find(c => c.id === clientId);
             const videosPerDay = client ? client.videosPerDay : 6;
+            const kickoffDate = client && client.kickoffDate ? new Date(client.kickoffDate) : null;
             
-            const clientSessions = data.sessions.filter(s => s.clientId === clientId && s.materialReceived);
+            if (kickoffDate) {
+                kickoffDate.setHours(0, 0, 0, 0);
+            }
+            
+            const clientSessions = data.sessions.filter(s => s.clientId === clientId && (s.materialReceivedDate || s.materialReceived));
             const totalVideos = clientSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
             const coverageDays = Math.floor(totalVideos / videosPerDay);
             
-            // Find the most recent session date (when material was received)
-            let latestSessionDate = new Date();
-            latestSessionDate.setHours(0, 0, 0, 0);
+            // Find the most recent material received date
+            let latestMaterialReceived = new Date();
+            latestMaterialReceived.setHours(0, 0, 0, 0);
             
             if (clientSessions.length > 0) {
-                const sessionDates = clientSessions.map(s => new Date(s.date));
-                latestSessionDate = new Date(Math.max(...sessionDates));
-                latestSessionDate.setHours(0, 0, 0, 0);
+                const materialDates = clientSessions.map(s => {
+                    // Handle both new format (materialReceivedDate) and old format (date)
+                    const dateStr = s.materialReceivedDate || s.date;
+                    return new Date(dateStr);
+                });
+                latestMaterialReceived = new Date(Math.max(...materialDates));
+                latestMaterialReceived.setHours(0, 0, 0, 0);
             }
             
-            // Calculate coverage until: Latest session date + 10 days production + coverage days
-            const coverageUntil = new Date(latestSessionDate);
-            coverageUntil.setDate(coverageUntil.getDate() + 10 + coverageDays);
+            // Videos ready date: Latest material received + 10 days production
+            const videosReadyDate = new Date(latestMaterialReceived);
+            videosReadyDate.setDate(videosReadyDate.getDate() + 10);
             
-            return {
-                sessionCount: clientSessions.length,
-                totalVideos,
-                coverageDays,
-                videosPerDay,
-                latestSessionDate: latestSessionDate.toLocaleDateString(),
-                coverageUntil: coverageUntil.toLocaleDateString(),
-                coverageUntilDate: coverageUntil,
-                isLowCoverage: coverageDays < 5
-            };
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            // If no kickoff date or kickoff date has passed, use normal calculation
+            if (!kickoffDate || today >= kickoffDate) {
+                // POST-LAUNCH: Coverage until = Videos ready date + coverage days
+                const coverageUntil = new Date(videosReadyDate);
+                coverageUntil.setDate(coverageUntil.getDate() + coverageDays);
+                
+                const daysRemaining = Math.floor((coverageUntil - today) / (1000 * 60 * 60 * 24));
+                
+                return {
+                    sessionCount: clientSessions.length,
+                    totalVideos,
+                    coverageDays,
+                    videosPerDay,
+                    latestMaterialReceived: latestMaterialReceived.toLocaleDateString(),
+                    videosReadyDate: videosReadyDate.toLocaleDateString(),
+                    coverageUntil: coverageUntil.toLocaleDateString(),
+                    coverageUntilDate: coverageUntil,
+                    daysRemaining,
+                    isLowCoverage: coverageDays < 10, // CHANGED: from 5 to 10
+                    isPostLaunch: true,
+                    kickoffDate: kickoffDate ? kickoffDate.toLocaleDateString() : null
+                };
+            } else {
+                // PRE-LAUNCH: Check if videos will be ready by kickoff
+                const daysUntilKickoff = Math.floor((kickoffDate - today) / (1000 * 60 * 60 * 24));
+                const videosReadyBeforeKickoff = videosReadyDate <= kickoffDate;
+                
+                // Coverage from kickoff date
+                const coverageFromKickoff = new Date(kickoffDate);
+                coverageFromKickoff.setDate(coverageFromKickoff.getDate() + coverageDays);
+                
+                return {
+                    sessionCount: clientSessions.length,
+                    totalVideos,
+                    coverageDays,
+                    videosPerDay,
+                    latestMaterialReceived: latestMaterialReceived.toLocaleDateString(),
+                    videosReadyDate: videosReadyDate.toLocaleDateString(),
+                    kickoffDate: kickoffDate.toLocaleDateString(),
+                    daysUntilKickoff,
+                    videosReadyBeforeKickoff,
+                    coverageFromKickoff: coverageFromKickoff.toLocaleDateString(),
+                    isLowCoverage: !videosReadyBeforeKickoff || coverageDays < 10, // CHANGED: from 5 to 10
+                    isPostLaunch: false,
+                    coverageUntil: coverageFromKickoff.toLocaleDateString(),
+                    coverageUntilDate: coverageFromKickoff
+                };
+            }
         }
 
         // Actions
@@ -183,11 +238,11 @@
 
         function addSession() {
             const clientId = parseInt(document.getElementById('session-client').value);
-            const date = document.getElementById('session-date').value;
+            const dateFiled = document.getElementById('session-date-filed').value;
+            const materialReceivedDate = document.getElementById('session-material-received').value;
             const duration = parseInt(document.getElementById('session-duration').value);
-            const materialReceived = document.getElementById('session-material').checked;
 
-            if (!clientId || !date || !duration) {
+            if (!clientId || !dateFiled || !materialReceivedDate || !duration) {
                 alert('Please fill all fields');
                 return;
             }
@@ -195,9 +250,10 @@
             data.sessions.push({
                 id: Date.now(),
                 clientId,
-                date,
+                dateFiled,
+                materialReceivedDate,
                 duration,
-                materialReceived
+                materialReceived: true // Auto-set to true since we have a date
             });
 
             data.addingSession = false;
@@ -279,6 +335,44 @@
             }
         }
 
+        function startEditKickoff(clientId) {
+            data.editingKickoffId = clientId;
+            draw();
+        }
+
+        function cancelEditKickoff() {
+            data.editingKickoffId = null;
+            draw();
+        }
+
+        function saveKickoffDate(clientId) {
+            const input = document.getElementById(`kickoff-${clientId}`);
+            const newValue = input.value;
+            
+            if (!newValue) {
+                alert('Please enter a valid date');
+                return;
+            }
+
+            let updated = false;
+            data.managers.forEach(mgr => {
+                if (mgr.clients && Array.isArray(mgr.clients)) {
+                    const client = mgr.clients.find(c => c.id === clientId);
+                    if (client) {
+                        client.kickoffDate = newValue;
+                        updated = true;
+                    }
+                }
+            });
+
+            if (updated) {
+                data.editingKickoffId = null;
+                db.ref('managers').set(data.managers).then(() => {
+                    draw();
+                });
+            }
+        }
+
         function toggleCalendar() {
             data.showCalendar = !data.showCalendar;
             draw();
@@ -311,8 +405,6 @@
             const totalVideosAfter = stats.totalVideos + newVideos;
             const newCoverageDays = Math.floor(totalVideosAfter / stats.videosPerDay);
             
-            // If filming today, session date = today
-            // Coverage until = today + 10 days production + new total coverage days
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const readyDate = new Date(today);
@@ -368,11 +460,9 @@
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             
-            // Coverage runs out on coverageUntilDate
-            // We want 5-day buffer, so film when: (coverageUntilDate - today) <= 5 + 10
-            // The +10 is because filming today takes 10 days to produce
+            // CHANGED: 10 day buffer (was 5) + 10 day production = 20 days total
             const daysUntilCoverageEnds = Math.floor((stats.coverageUntilDate - today) / (1000 * 60 * 60 * 24));
-            const daysUntilFilm = daysUntilCoverageEnds - 15; // 5 day buffer + 10 day production
+            const daysUntilFilm = daysUntilCoverageEnds - 20; // 10 day buffer + 10 day production
             
             const filmBy = new Date(today);
             filmBy.setDate(filmBy.getDate() + Math.max(0, daysUntilFilm));
@@ -381,7 +471,7 @@
                 filmBy: filmBy.toLocaleDateString(),
                 daysLeft: Math.max(0, daysUntilFilm),
                 isUrgent: daysUntilFilm <= 0,
-                isWarning: daysUntilFilm > 0 && daysUntilFilm <= 3
+                isWarning: daysUntilFilm > 0 && daysUntilFilm <= 5
             };
         }
 
@@ -389,7 +479,6 @@
         function filterClients(clients) {
             let filtered = clients;
             
-            // Search filter
             if (data.searchQuery) {
                 filtered = filtered.filter(c => 
                     c.name.toLowerCase().includes(data.searchQuery) ||
@@ -397,7 +486,6 @@
                 );
             }
 
-            // Status filter
             if (data.statusFilter !== 'all') {
                 filtered = filtered.filter(c => {
                     const stats = getClientStats(c.id);
@@ -407,7 +495,6 @@
                 });
             }
 
-            // Sort
             if (data.sortBy) {
                 filtered.sort((a, b) => {
                     const statsA = getClientStats(a.id);
@@ -498,7 +585,7 @@
             const filtered = filterClients(allClients);
 
             const totalSessions = data.sessions.length;
-            const totalMaterialReceived = data.sessions.filter(s => s.materialReceived).length;
+            const totalMaterialReceived = data.sessions.filter(s => s.materialReceivedDate || s.materialReceived).length;
             const urgentClients = allClients.filter(c => getClientStats(c.id).isLowCoverage);
 
             document.getElementById('app').innerHTML = `
@@ -508,8 +595,8 @@
                         <div class="max-w-7xl mx-auto px-8 py-6">
                             <div class="flex justify-between items-center">
                                 <div>
-                                    <h1 class="text-3xl font-bold text-slate-900">Content Production Tracker</h1>
-                                    <p class="text-slate-600 mt-1">Track filming sessions & content coverage</p>
+                                    <h1 class="text-3xl font-bold text-slate-900">Content Production Tracker v2.0</h1>
+                                    <p class="text-slate-600 mt-1">Track filming sessions & content coverage • Every 10 mins = 2 videos • Urgent < 10 days</p>
                                 </div>
                                 <div id="sync-status" class="flex items-center gap-2 text-sm">
                                     <span class="text-emerald-600 font-medium">Loaded</span>
@@ -565,7 +652,7 @@
                                     const sessionsWithClients = data.sessions.map(s => {
                                         const client = allClients.find(c => c.id === s.clientId);
                                         return { ...s, clientName: client ? client.name : 'Unknown' };
-                                    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+                                    }).sort((a, b) => new Date(b.dateFiled || b.date) - new Date(a.dateFiled || a.date));
                                     
                                     if (sessionsWithClients.length === 0) {
                                         return '<p class="text-slate-500 text-center py-8">No sessions recorded yet</p>';
@@ -575,16 +662,19 @@
                                         <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                                             ${sessionsWithClients.map(s => {
                                                 const videos = calculateSessionVideos(s.duration);
+                                                const hasMaterial = s.materialReceivedDate || s.materialReceived;
+                                                const filedDate = s.dateFiled || s.date;
                                                 return `
-                                                    <div class="bg-slate-50 rounded-lg p-4 border ${s.materialReceived ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}">
+                                                    <div class="bg-slate-50 rounded-lg p-4 border ${hasMaterial ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}">
                                                         <div class="flex items-center gap-2 mb-2">
                                                             <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                                                            <span class="font-bold text-slate-900">${new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                                            <span class="font-bold text-slate-900">${new Date(filedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                                                         </div>
                                                         <div class="font-semibold text-slate-900 mb-1">${s.clientName}</div>
-                                                        <div class="text-sm text-slate-600 mb-2">${s.duration} min • ${videos} videos</div>
+                                                        <div class="text-sm text-slate-600 mb-1">${s.duration} min • ${videos} videos</div>
+                                                        ${s.materialReceivedDate ? `<div class="text-xs text-slate-600 mb-2">Material: ${new Date(s.materialReceivedDate).toLocaleDateString()}</div>` : ''}
                                                         <div class="flex items-center gap-2">
-                                                            ${s.materialReceived ? 
+                                                            ${hasMaterial ? 
                                                                 '<span class="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-medium">✓ Material Received</span>' :
                                                                 '<span class="text-xs px-2 py-1 bg-amber-100 text-amber-700 rounded font-medium">⏳ Pending</span>'
                                                             }
@@ -617,7 +707,7 @@
                                                 class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
                                         </div>
                                         <div class="bg-blue-50 rounded-lg p-4 text-sm text-blue-800">
-                                            <strong>Formula:</strong> Every 10 minutes = 4 videos<br>
+                                            <strong>Formula:</strong> Every 10 minutes = 2 videos<br>
                                             Videos ÷ Videos per day = Coverage days
                                         </div>
                                     </div>
@@ -628,21 +718,19 @@
                             </div>
                         ` : ''}
 
-                        <!-- ONE Unified Action Required Table -->
+                        <!-- Action Required Table -->
                         ${(() => {
-                            // Get all clients that need attention (urgent OR need filming soon)
                             const actionRequired = allClients.map(c => {
                                 const stats = getClientStats(c.id);
-                                const deadline = getFilmingDeadline(c.id);
+                                const deadline = stats.isPostLaunch ? getFilmingDeadline(c.id) : null;
                                 return {
                                     ...c,
                                     stats,
                                     deadline,
-                                    needsAction: stats.isLowCoverage || deadline.isUrgent || deadline.isWarning
+                                    needsAction: stats.isLowCoverage || (deadline && (deadline.isUrgent || deadline.isWarning))
                                 };
                             }).filter(c => c.needsAction)
                                .sort((a, b) => {
-                                   // Sort by urgency: urgent coverage first, then by days left
                                    if (a.stats.isLowCoverage && !b.stats.isLowCoverage) return -1;
                                    if (!a.stats.isLowCoverage && b.stats.isLowCoverage) return 1;
                                    return a.stats.coverageDays - b.stats.coverageDays;
@@ -650,7 +738,7 @@
                             
                             if (actionRequired.length === 0) return '';
                             
-                            const urgentCount = actionRequired.filter(c => c.stats.isLowCoverage || c.deadline.isUrgent).length;
+                            const urgentCount = actionRequired.filter(c => c.stats.isLowCoverage || (c.deadline && c.deadline.isUrgent)).length;
                             const soonCount = actionRequired.length - urgentCount;
                             
                             return `
@@ -676,16 +764,14 @@
                                                 <tr>
                                                     <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Priority</th>
                                                     <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Client</th>
-                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Manager</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Status</th>
                                                     <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase">Coverage</th>
-                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Coverage Until</th>
-                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Film By</th>
-                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Reason</th>
+                                                    <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase">Details</th>
                                                 </tr>
                                             </thead>
                                             <tbody class="divide-y divide-slate-200">
                                                 ${actionRequired.map(client => {
-                                                    const isUrgent = client.stats.isLowCoverage || client.deadline.isUrgent;
+                                                    const isUrgent = client.stats.isLowCoverage || (client.deadline && client.deadline.isUrgent);
                                                     const priorityLabel = isUrgent ? 'URGENT' : 'SOON';
                                                     const rowClass = isUrgent ? 'bg-red-50' : 'bg-orange-50';
                                                     
@@ -698,11 +784,14 @@
                                                             </td>
                                                             <td class="px-6 py-4">
                                                                 <div class="font-bold text-slate-900">${client.name}</div>
-                                                                <button onclick="viewClientDetails(${client.id})" class="text-xs text-purple-600 hover:text-purple-800 mt-1">
-                                                                    View Details
-                                                                </button>
+                                                                <div class="text-sm text-slate-600">${client.managerName}</div>
                                                             </td>
-                                                            <td class="px-6 py-4 text-slate-700">${client.managerName}</td>
+                                                            <td class="px-6 py-4">
+                                                                ${client.stats.isPostLaunch ? 
+                                                                    '<span class="text-sm text-slate-700">Post-Launch</span>' :
+                                                                    `<span class="text-sm text-blue-700">Pre-Launch (${client.stats.daysUntilKickoff}d)</span>`
+                                                                }
+                                                            </td>
                                                             <td class="px-6 py-4 text-center">
                                                                 <div class="font-bold text-2xl ${client.stats.isLowCoverage ? 'text-red-600' : 'text-orange-600'}">
                                                                     ${client.stats.coverageDays}
@@ -710,19 +799,16 @@
                                                                 <div class="text-xs text-slate-600">days</div>
                                                             </td>
                                                             <td class="px-6 py-4">
-                                                                <div class="font-semibold text-slate-900">${client.stats.coverageUntil}</div>
-                                                            </td>
-                                                            <td class="px-6 py-4">
-                                                                <div class="font-bold ${isUrgent ? 'text-red-600' : 'text-orange-600'}">
-                                                                    ${client.deadline.isUrgent ? '🚨 NOW!' : client.deadline.filmBy}
-                                                                </div>
-                                                                ${!client.deadline.isUrgent ? `<div class="text-xs text-slate-600 mt-1">${client.deadline.daysLeft} days</div>` : ''}
-                                                            </td>
-                                                            <td class="px-6 py-4">
-                                                                ${client.stats.isLowCoverage ? 
-                                                                    '<div class="text-sm font-medium text-red-700">⚠️ Low coverage (<5 days)</div>' :
-                                                                    '<div class="text-sm font-medium text-orange-700">📅 Film soon to maintain buffer</div>'
+                                                                ${!client.stats.isPostLaunch ? 
+                                                                    (client.stats.videosReadyBeforeKickoff ? 
+                                                                        `<div class="text-sm text-emerald-700">✓ Ready for kickoff (${client.stats.kickoffDate})</div>` :
+                                                                        `<div class="text-sm text-red-700">⚠️ Videos not ready by kickoff (${client.stats.kickoffDate})</div>`
+                                                                    ) :
+                                                                    `<div class="text-sm text-slate-700">Coverage until: ${client.stats.coverageUntil}</div>`
                                                                 }
+                                                                <button onclick="viewClientDetails(${client.id})" class="text-xs text-purple-600 hover:text-purple-800 mt-1">
+                                                                    View Details
+                                                                </button>
                                                             </td>
                                                         </tr>
                                                     `;
@@ -784,17 +870,16 @@
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-slate-700 mb-2">Date Filmed</label>
-                                        <input type="date" id="session-date" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        <input type="date" id="session-date-filed" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
                                     </div>
                                     <div>
-                                        <label class="block text-sm font-medium text-slate-700 mb-2">Duration (minutes)</label>
-                                        <input type="number" id="session-duration" placeholder="120" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        <label class="block text-sm font-medium text-slate-700 mb-2">Material Received Date</label>
+                                        <input type="date" id="session-material-received" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
                                     </div>
                                     <div class="col-span-2">
-                                        <label class="flex items-center gap-2 cursor-pointer">
-                                            <input type="checkbox" id="session-material" class="w-5 h-5 text-purple-600 rounded">
-                                            <span class="text-sm font-medium text-slate-700">Material Received</span>
-                                        </label>
+                                        <label class="block text-sm font-medium text-slate-700 mb-2">Duration (minutes)</label>
+                                        <input type="number" id="session-duration" placeholder="120" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        <p class="text-xs text-slate-500 mt-1">Formula: Duration ÷ 10 × 2 = Videos</p>
                                     </div>
                                 </div>
                                 <div class="flex gap-3 mt-6">
@@ -816,6 +901,7 @@
                                         <tr>
                                             <th onclick="sortBy('name')" class="sortable px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'name' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Client</th>
                                             <th onclick="sortBy('manager')" class="sortable px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'manager' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Manager</th>
+                                            <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Kickoff Date</th>
                                             <th class="px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">Videos/Day</th>
                                             <th onclick="sortBy('sessions')" class="sortable px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'sessions' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Sessions</th>
                                             <th onclick="sortBy('videos')" class="sortable px-6 py-4 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider ${data.sortBy === 'videos' ? (data.sortDir === 'asc' ? 'sort-asc' : 'sort-desc') : ''}">Videos</th>
@@ -827,11 +913,11 @@
                                     </thead>
                                     <tbody class="divide-y divide-slate-200">
                                         ${filtered.length === 0 ? 
-                                            '<tr><td colspan="9" class="px-6 py-12 text-center text-slate-500">No clients found</td></tr>' :
+                                            '<tr><td colspan="10" class="px-6 py-12 text-center text-slate-500">No clients found</td></tr>' :
                                             filtered.map(client => {
                                                 const stats = getClientStats(client.id);
                                                 const sessions = data.sessions.filter(s => s.clientId === client.id);
-                                                const rowClass = stats.isLowCoverage ? 'row-urgent' : 'row-good';
+                                                const rowClass = !stats.isPostLaunch ? 'row-prelunch' : (stats.isLowCoverage ? 'row-urgent' : 'row-good');
                                                 
                                                 return `
                                                     <tr class="${rowClass} fade-in">
@@ -842,6 +928,33 @@
                                                             </button>
                                                         </td>
                                                         <td class="px-6 py-4 text-slate-700">${client.managerName}</td>
+                                                        <td class="px-6 py-4 text-center">
+                                                            ${data.editingKickoffId === client.id ? `
+                                                                <div class="flex items-center justify-center gap-2">
+                                                                    <input type="date" id="kickoff-${client.id}" value="${client.kickoffDate || ''}" 
+                                                                        class="w-32 px-2 py-1 border border-purple-300 rounded text-center text-xs focus:ring-2 focus:ring-purple-500">
+                                                                    <button onclick="saveKickoffDate(${client.id})" 
+                                                                        class="p-1 text-green-600 hover:bg-green-50 rounded" title="Save">
+                                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                                                    </button>
+                                                                    <button onclick="cancelEditKickoff()" 
+                                                                        class="p-1 text-red-600 hover:bg-red-50 rounded" title="Cancel">
+                                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                                                    </button>
+                                                                </div>
+                                                            ` : `
+                                                                <div class="flex items-center justify-center gap-2">
+                                                                    ${client.kickoffDate ? 
+                                                                        `<span class="text-sm text-slate-700">${new Date(client.kickoffDate).toLocaleDateString()}</span>` :
+                                                                        '<span class="text-xs text-slate-400">Not set</span>'
+                                                                    }
+                                                                    <button onclick="startEditKickoff(${client.id})" 
+                                                                        class="p-1 text-purple-600 hover:bg-purple-50 rounded" title="Edit Kickoff Date">
+                                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                                                    </button>
+                                                                </div>
+                                                            `}
+                                                        </td>
                                                         <td class="px-6 py-4 text-center">
                                                             ${data.editingClientId === client.id ? `
                                                                 <div class="flex items-center justify-center gap-2">
@@ -883,15 +996,24 @@
                                                                 </span>
                                                                 <div class="w-full bg-slate-200 rounded-full h-2">
                                                                     <div class="${stats.isLowCoverage ? 'bg-red-500' : 'bg-emerald-500'} h-2 rounded-full" 
-                                                                        style="width: ${Math.min(stats.coverageDays * 10, 100)}%"></div>
+                                                                        style="width: ${Math.min(stats.coverageDays * 5, 100)}%"></div>
                                                                 </div>
                                                             </div>
                                                         </td>
-                                                        <td class="px-6 py-4 text-slate-700">${stats.coverageUntil}</td>
+                                                        <td class="px-6 py-4">
+                                                            <div class="text-slate-700">${stats.coverageUntil}</div>
+                                                            ${!stats.isPostLaunch ? `<div class="text-xs text-blue-600 mt-1">Kickoff in ${stats.daysUntilKickoff}d</div>` : ''}
+                                                        </td>
                                                         <td class="px-6 py-4 text-center">
-                                                            ${stats.isLowCoverage ? 
-                                                                '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-red-100 text-red-800">🔴 URGENT</span>' :
-                                                                '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-emerald-100 text-emerald-800">✓ Good</span>'
+                                                            ${!stats.isPostLaunch ? 
+                                                                (stats.videosReadyBeforeKickoff ?
+                                                                    '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">🚀 Ready</span>' :
+                                                                    '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-red-100 text-red-800">⚠️ Not Ready</span>'
+                                                                ) :
+                                                                (stats.isLowCoverage ? 
+                                                                    '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-red-100 text-red-800">🔴 URGENT</span>' :
+                                                                    '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-emerald-100 text-emerald-800">✓ Good</span>'
+                                                                )
                                                             }
                                                         </td>
                                                         <td class="px-6 py-4 text-center">
@@ -914,7 +1036,6 @@
 
             isDrawing = false;
             
-            // Draw chart after DOM update
             setTimeout(() => drawChart(filtered), 100);
         }
 
@@ -935,6 +1056,7 @@
                             <div>
                                 <h2 class="text-2xl font-bold text-slate-900">${client.name}</h2>
                                 <p class="text-slate-600 mt-1">Account Manager: ${client.managerName}</p>
+                                ${client.kickoffDate ? `<p class="text-sm text-slate-600 mt-1">Kickoff Date: ${new Date(client.kickoffDate).toLocaleDateString()}</p>` : ''}
                             </div>
                             <button onclick="this.closest('.fixed').remove()" class="text-slate-400 hover:text-slate-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
@@ -965,9 +1087,21 @@
                             </div>
                         </div>
                         
-                        <div class="bg-blue-50 rounded-lg p-4 mb-6 text-sm">
-                            <strong>Calculation:</strong> Latest session (${stats.latestSessionDate}) + 10 days production + ${stats.coverageDays} days coverage = ${stats.coverageUntil}
-                        </div>
+                        ${!stats.isPostLaunch ? `
+                            <div class="bg-blue-50 rounded-lg p-4 mb-6 text-sm">
+                                <strong>Pre-Launch Status:</strong><br>
+                                Kickoff in ${stats.daysUntilKickoff} days (${stats.kickoffDate})<br>
+                                Videos ready: ${stats.videosReadyDate}<br>
+                                ${stats.videosReadyBeforeKickoff ? 
+                                    `✅ Videos will be ready before kickoff!<br>Coverage from kickoff: ${stats.coverageDays} days (${stats.kickoffDate} → ${stats.coverageFromKickoff})` :
+                                    `⚠️ Videos won't be ready by kickoff date!`
+                                }
+                            </div>
+                        ` : `
+                            <div class="bg-blue-50 rounded-lg p-4 mb-6 text-sm">
+                                <strong>Calculation:</strong> Latest material received (${stats.latestMaterialReceived}) + 10 days production + ${stats.coverageDays} days coverage = ${stats.coverageUntil}
+                            </div>
+                        `}
 
                         <!-- Sessions List -->
                         <h3 class="text-lg font-bold text-slate-900 mb-4">Sessions</h3>
@@ -976,16 +1110,21 @@
                                 '<p class="text-slate-500 text-center py-8">No sessions recorded</p>' :
                                 sessions.map(session => {
                                     const videos = calculateSessionVideos(session.duration);
+                                    const filedDate = session.dateFiled || session.date;
+                                    const materialDate = session.materialReceivedDate || (session.materialReceived ? filedDate : 'Not received');
                                     return `
                                         <div class="bg-slate-50 rounded-lg p-4 flex items-center justify-between">
                                             <div class="flex-1">
                                                 <div class="flex items-center gap-3 mb-2">
-                                                    <span class="font-semibold text-slate-900">${new Date(session.date).toLocaleDateString()}</span>
+                                                    <span class="font-semibold text-slate-900">Filmed: ${new Date(filedDate).toLocaleDateString()}</span>
                                                     <span class="text-sm text-slate-600">${session.duration} min</span>
                                                     <span class="text-sm font-medium text-purple-600">${videos} videos</span>
                                                 </div>
+                                                <div class="text-sm text-slate-600 mb-2">
+                                                    Material received: ${materialDate !== 'Not received' ? new Date(materialDate).toLocaleDateString() : materialDate}
+                                                </div>
                                                 <label class="flex items-center gap-2 cursor-pointer">
-                                                    <input type="checkbox" ${session.materialReceived ? 'checked' : ''} 
+                                                    <input type="checkbox" ${session.materialReceivedDate || session.materialReceived ? 'checked' : ''} 
                                                         onchange="toggleMaterial(${session.id}); setTimeout(() => this.closest('.fixed').remove(), 100);"
                                                         class="w-4 h-4 text-purple-600 rounded">
                                                     <span class="text-sm text-slate-600">Material Received</span>
