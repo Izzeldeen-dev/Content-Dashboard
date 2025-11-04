@@ -193,7 +193,7 @@
                     coverageUntil: coverageUntil.toLocaleDateString(),
                     coverageUntilDate: coverageUntil,
                     daysRemaining,
-                    isLowCoverage: coverageDays < 10, // CHANGED: from 5 to 10
+                    isLowCoverage: daysRemaining < 10, // FIXED: Check days remaining, not total coverage days
                     isPostLaunch: true,
                     kickoffDate: kickoffDate ? kickoffDate.toLocaleDateString() : null
                 };
