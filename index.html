@@ -153,92 +153,140 @@
             }
             
             const clientSessions = data.sessions.filter(s => s.clientId === clientId && (s.materialReceivedDate || s.materialReceived));
-            const totalVideos = clientSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
-            const coverageDays = Math.floor(totalVideos / videosPerDay);
             
-            // Find the most recent material received date
-            let latestMaterialReceived = new Date();
-            latestMaterialReceived.setHours(0, 0, 0, 0);
-            
-            if (clientSessions.length > 0) {
-                const materialDates = clientSessions.map(s => {
-                    // Handle both new format (materialReceivedDate) and old format (date)
-                    const dateStr = s.materialReceivedDate || s.date;
-                    return new Date(dateStr);
-                });
-                latestMaterialReceived = new Date(Math.max(...materialDates));
-                latestMaterialReceived.setHours(0, 0, 0, 0);
+            if (clientSessions.length === 0) {
+                return {
+                    sessionCount: 0,
+                    totalVideos: 0,
+                    coverageDays: 0,
+                    videosPerDay,
+                    coverageUntil: 'N/A',
+                    coverageUntilDate: null,
+                    daysRemaining: 0,
+                    status: 'NO SESSIONS',
+                    isLowCoverage: false,
+                    isPostLaunch: false
+                };
             }
             
-            // Videos ready date: Latest material received + 10 days production
-            const videosReadyDate = new Date(latestMaterialReceived);
-            videosReadyDate.setDate(videosReadyDate.getDate() + 10);
+            // Sort sessions by material received date
+            const sortedSessions = clientSessions.sort((a, b) => {
+                const dateA = new Date(a.materialReceivedDate || a.date);
+                const dateB = new Date(b.materialReceivedDate || b.date);
+                return dateA - dateB;
+            });
+            
+            const totalVideos = sortedSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
             
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             
-            // If no kickoff date or kickoff date has passed, use normal calculation
-            if (!kickoffDate || today >= kickoffDate) {
-                // POST-LAUNCH: Coverage until = Videos ready date + coverage days
-                const coverageUntil = new Date(videosReadyDate);
-                coverageUntil.setDate(coverageUntil.getDate() + coverageDays);
+            // PRE-LAUNCH: If no kickoff date or kickoff date hasn't arrived yet
+            if (!kickoffDate || today < kickoffDate) {
+                const coverageDays = Math.floor(totalVideos / videosPerDay);
                 
-                const daysRemaining = Math.floor((coverageUntil - today) / (1000 * 60 * 60 * 24));
+                // Find latest material received
+                const latestMaterialReceived = new Date(Math.max(...sortedSessions.map(s => new Date(s.materialReceivedDate || s.date))));
+                latestMaterialReceived.setHours(0, 0, 0, 0);
                 
-                // Determine status
-                let status, isLowCoverage;
-                if (daysRemaining < 0) {
-                    status = 'OUT OF CONTENT';
-                    isLowCoverage = true;
-                } else if (daysRemaining < 10) {
-                    status = 'URGENT';
-                    isLowCoverage = true;
-                } else {
-                    status = 'GOOD';
-                    isLowCoverage = false;
-                }
+                const videosReadyDate = new Date(latestMaterialReceived);
+                videosReadyDate.setDate(videosReadyDate.getDate() + 10);
                 
-                return {
-                    sessionCount: clientSessions.length,
-                    totalVideos,
-                    coverageDays,
-                    videosPerDay,
-                    latestMaterialReceived: latestMaterialReceived.toLocaleDateString(),
-                    videosReadyDate: videosReadyDate.toLocaleDateString(),
-                    coverageUntil: coverageUntil.toLocaleDateString(),
-                    coverageUntilDate: coverageUntil,
-                    daysRemaining,
-                    status,
-                    isLowCoverage,
-                    isPostLaunch: true,
-                    kickoffDate: kickoffDate ? kickoffDate.toLocaleDateString() : null
-                };
-            } else {
-                // PRE-LAUNCH: Check if videos will be ready by kickoff
-                const daysUntilKickoff = Math.floor((kickoffDate - today) / (1000 * 60 * 60 * 24));
-                const videosReadyBeforeKickoff = videosReadyDate <= kickoffDate;
+                const daysUntilKickoff = kickoffDate ? Math.floor((kickoffDate - today) / (1000 * 60 * 60 * 24)) : 0;
+                const videosReadyBeforeKickoff = kickoffDate ? videosReadyDate <= kickoffDate : false;
                 
-                // Coverage from kickoff date
-                const coverageFromKickoff = new Date(kickoffDate);
+                const coverageFromKickoff = kickoffDate ? new Date(kickoffDate) : new Date(videosReadyDate);
                 coverageFromKickoff.setDate(coverageFromKickoff.getDate() + coverageDays);
                 
                 return {
-                    sessionCount: clientSessions.length,
+                    sessionCount: sortedSessions.length,
                     totalVideos,
                     coverageDays,
                     videosPerDay,
                     latestMaterialReceived: latestMaterialReceived.toLocaleDateString(),
                     videosReadyDate: videosReadyDate.toLocaleDateString(),
-                    kickoffDate: kickoffDate.toLocaleDateString(),
+                    kickoffDate: kickoffDate ? kickoffDate.toLocaleDateString() : null,
                     daysUntilKickoff,
                     videosReadyBeforeKickoff,
                     coverageFromKickoff: coverageFromKickoff.toLocaleDateString(),
-                    isLowCoverage: !videosReadyBeforeKickoff || coverageDays < 10, // CHANGED: from 5 to 10
+                    isLowCoverage: !videosReadyBeforeKickoff || coverageDays < 10,
                     isPostLaunch: false,
                     coverageUntil: coverageFromKickoff.toLocaleDateString(),
                     coverageUntilDate: coverageFromKickoff
                 };
             }
+            
+            // POST-LAUNCH: Use CHAIN METHOD
+            // Separate sessions into before/at kickoff and after kickoff
+            const preKickoffSessions = [];
+            const postKickoffSessions = [];
+            
+            sortedSessions.forEach(session => {
+                const materialDate = new Date(session.materialReceivedDate || session.date);
+                materialDate.setHours(0, 0, 0, 0);
+                
+                if (materialDate <= kickoffDate) {
+                    preKickoffSessions.push(session);
+                } else {
+                    postKickoffSessions.push(session);
+                }
+            });
+            
+            // Calculate coverage end date using chain method
+            let coverageEndDate = new Date(kickoffDate);
+            
+            // 1. Add all pre-kickoff sessions coverage together from kickoff date
+            if (preKickoffSessions.length > 0) {
+                const preKickoffVideos = preKickoffSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
+                const preKickoffCoverageDays = Math.floor(preKickoffVideos / videosPerDay);
+                coverageEndDate.setDate(coverageEndDate.getDate() + preKickoffCoverageDays);
+            }
+            
+            // 2. Chain post-kickoff sessions one by one
+            postKickoffSessions.forEach(session => {
+                const sessionVideos = calculateSessionVideos(session.duration);
+                const sessionCoverageDays = Math.floor(sessionVideos / videosPerDay);
+                
+                // Each session starts the day after previous coverage ends
+                coverageEndDate.setDate(coverageEndDate.getDate() + sessionCoverageDays);
+            });
+            
+            // Calculate days remaining from today
+            const daysRemaining = Math.floor((coverageEndDate - today) / (1000 * 60 * 60 * 24));
+            
+            // Determine status and display coverage days
+            let status, isLowCoverage, displayCoverageDays;
+            if (daysRemaining < 0) {
+                status = 'OUT OF CONTENT';
+                isLowCoverage = true;
+                displayCoverageDays = 0; // No coverage left!
+            } else if (daysRemaining < 10) {
+                status = 'URGENT';
+                isLowCoverage = true;
+                displayCoverageDays = daysRemaining; // Actual days remaining
+            } else {
+                status = 'GOOD';
+                isLowCoverage = false;
+                displayCoverageDays = daysRemaining; // Actual days remaining
+            }
+            
+            // Find latest material received for display
+            const latestMaterialReceived = new Date(Math.max(...sortedSessions.map(s => new Date(s.materialReceivedDate || s.date))));
+            
+            return {
+                sessionCount: sortedSessions.length,
+                totalVideos,
+                coverageDays: displayCoverageDays,
+                videosPerDay,
+                latestMaterialReceived: latestMaterialReceived.toLocaleDateString(),
+                coverageUntil: coverageEndDate.toLocaleDateString(),
+                coverageUntilDate: coverageEndDate,
+                daysRemaining,
+                status,
+                isLowCoverage,
+                isPostLaunch: true,
+                kickoffDate: kickoffDate.toLocaleDateString()
+            };
         }
 
         // Actions
@@ -418,53 +466,62 @@
             
             const stats = getClientStats(clientId);
             const newVideos = calculateSessionVideos(duration);
-            const totalVideosAfter = stats.totalVideos + newVideos;
-            const newCoverageDays = Math.floor(totalVideosAfter / stats.videosPerDay);
             
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            const readyDate = new Date(today);
-            readyDate.setDate(readyDate.getDate() + 10);
             
-            const newCoverageUntil = new Date(today);
-            newCoverageUntil.setDate(newCoverageUntil.getDate() + 10 + newCoverageDays);
+            // New session would be added today
+            const materialReceivedDate = today;
+            const kickoffDate = client.kickoffDate ? new Date(client.kickoffDate) : null;
+            if (kickoffDate) kickoffDate.setHours(0, 0, 0, 0);
+            
+            // Calculate new coverage using chain method
+            let currentCoverageEnd = stats.coverageUntilDate ? new Date(stats.coverageUntilDate) : (kickoffDate || today);
+            
+            const newSessionCoverageDays = Math.floor(newVideos / stats.videosPerDay);
+            
+            // Chain from current coverage end
+            const newCoverageEnd = new Date(currentCoverageEnd);
+            newCoverageEnd.setDate(newCoverageEnd.getDate() + newSessionCoverageDays);
+            
+            const totalVideosAfter = stats.totalVideos + newVideos;
+            const extensionDays = Math.floor((newCoverageEnd - currentCoverageEnd) / (1000 * 60 * 60 * 24));
             
             document.getElementById('calc-result').innerHTML = `
                 <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-200">
                     <h4 class="font-bold text-purple-900 mb-3">If you film today:</h4>
                     <div class="space-y-2 text-sm">
                         <div class="flex justify-between">
-                            <span class="text-slate-700">Session Date:</span>
-                            <span class="font-bold text-slate-900">${today.toLocaleDateString()}</span>
-                        </div>
-                        <div class="flex justify-between">
                             <span class="text-slate-700">New Videos:</span>
                             <span class="font-bold text-slate-900">+${newVideos} videos</span>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-slate-700">Production Time:</span>
-                            <span class="font-medium text-slate-900">10 days</span>
-                        </div>
-                        <div class="flex justify-between">
-                            <span class="text-slate-700">Ready to Post:</span>
-                            <span class="font-medium text-slate-900">${readyDate.toLocaleDateString()}</span>
+                            <span class="text-slate-700">Session Coverage:</span>
+                            <span class="font-medium text-slate-900">+${newSessionCoverageDays} days</span>
                         </div>
                         <div class="flex justify-between border-t pt-2">
-                            <span class="text-slate-700">Current Coverage:</span>
-                            <span class="font-medium text-slate-900">${stats.coverageDays} days (until ${stats.coverageUntil})</span>
+                            <span class="text-slate-700">Current Total Videos:</span>
+                            <span class="font-medium text-slate-900">${stats.totalVideos} videos</span>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-slate-700">New Total Coverage:</span>
-                            <span class="font-bold text-purple-600 text-lg">${newCoverageDays} days</span>
+                            <span class="text-slate-700">New Total Videos:</span>
+                            <span class="font-bold text-purple-600">${totalVideosAfter} videos</span>
                         </div>
-                        <div class="flex justify-between border-t pt-2 bg-white rounded p-2">
-                            <span class="text-slate-700 font-bold">Coverage Until:</span>
-                            <span class="font-bold text-purple-600 text-lg">${newCoverageUntil.toLocaleDateString()}</span>
+                        <div class="flex justify-between border-t pt-2">
+                            <span class="text-slate-700">Current Coverage Until:</span>
+                            <span class="font-medium text-slate-900">${stats.coverageUntil}</span>
+                        </div>
+                        <div class="flex justify-between bg-white rounded p-2">
+                            <span class="text-slate-700 font-bold">New Coverage Until:</span>
+                            <span class="font-bold text-purple-600 text-lg">${newCoverageEnd.toLocaleDateString()}</span>
                         </div>
                         <div class="flex justify-between">
                             <span class="text-slate-700">Extension:</span>
-                            <span class="font-bold text-emerald-600 text-lg">+${newCoverageDays - stats.coverageDays} days</span>
+                            <span class="font-bold text-emerald-600 text-lg">+${extensionDays} days</span>
                         </div>
+                    </div>
+                    <div class="mt-3 text-xs text-slate-600 bg-blue-50 rounded p-2">
+                        <strong>Chain Method:</strong> New session chains after current coverage ends
                     </div>
                 </div>
             `;
@@ -612,7 +669,7 @@
                             <div class="flex justify-between items-center">
                                 <div>
                                     <h1 class="text-3xl font-bold text-slate-900">Content Production Tracker v2.0</h1>
-                                    <p class="text-slate-600 mt-1">Track filming sessions & content coverage • Every 10 mins = 2 videos • Urgent < 10 days</p>
+                                    <p class="text-slate-600 mt-1">Track filming sessions & content coverage • Every 10 mins = 2 videos • Urgent < 10 days • Chain Method</p>
                                 </div>
                                 <div id="sync-status" class="flex items-center gap-2 text-sm">
                                     <span class="text-emerald-600 font-medium">Loaded</span>
@@ -1133,7 +1190,14 @@
                             </div>
                         ` : `
                             <div class="bg-blue-50 rounded-lg p-4 mb-6 text-sm">
-                                <strong>Calculation:</strong> Latest material received (${stats.latestMaterialReceived}) + 10 days production + ${stats.coverageDays} days coverage = ${stats.coverageUntil}
+                                <strong>Coverage Calculation (Chain Method):</strong><br>
+                                Sessions before/at kickoff are grouped and counted from kickoff date (${stats.kickoffDate})<br>
+                                Sessions after kickoff are chained sequentially<br>
+                                Coverage ends: ${stats.coverageUntil}<br>
+                                ${stats.status === 'OUT OF CONTENT' ? 
+                                    `⛔ Ran out ${Math.abs(stats.daysRemaining)} days ago!` :
+                                    `✅ ${stats.daysRemaining} days remaining`
+                                }
                             </div>
                         `}
 
