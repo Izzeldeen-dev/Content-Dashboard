@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -59,6 +60,7 @@
             sessions: [],
             syncing: false,
             addingSession: false,
+            isAddingRemake: false,
             searchQuery: '',
             editingClientId: null,
             editingKickoffId: null,
@@ -139,8 +141,11 @@
         }
 
         // CHANGED: Every 10 mins = 2 videos (was 4)
-        function calculateSessionVideos(durationMinutes) {
-            return Math.floor(durationMinutes / 10) * 2;
+        function calculateSessionVideos(session) {
+            if (session.isRemake) {
+                return session.numberOfVideos; // Remakes have direct video count
+            }
+            return Math.floor(session.duration / 10) * 2;
         }
 
         function getClientStats(clientId) {
@@ -152,7 +157,7 @@
                 kickoffDate.setHours(0, 0, 0, 0);
             }
             
-            const clientSessions = data.sessions.filter(s => s.clientId === clientId && (s.materialReceivedDate || s.materialReceived));
+            const clientSessions = data.sessions.filter(s => s.clientId === clientId && (s.materialReceivedDate || s.materialReceived || s.isRemake));
             
             if (clientSessions.length === 0) {
                 return {
@@ -169,14 +174,14 @@
                 };
             }
             
-            // Sort sessions by material received date
+            // Sort sessions by material received date (or dateReceived for remakes)
             const sortedSessions = clientSessions.sort((a, b) => {
-                const dateA = new Date(a.materialReceivedDate || a.date);
-                const dateB = new Date(b.materialReceivedDate || b.date);
+                const dateA = new Date(a.isRemake ? a.dateReceived : (a.materialReceivedDate || a.date));
+                const dateB = new Date(b.isRemake ? b.dateReceived : (b.materialReceivedDate || b.date));
                 return dateA - dateB;
             });
             
-            const totalVideos = sortedSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
+            const totalVideos = sortedSessions.reduce((sum, s) => sum + calculateSessionVideos(s), 0);
             
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -185,12 +190,25 @@
             if (!kickoffDate || today < kickoffDate) {
                 const coverageDays = Math.floor(totalVideos / videosPerDay);
                 
-                // Find latest material received
-                const latestMaterialReceived = new Date(Math.max(...sortedSessions.map(s => new Date(s.materialReceivedDate || s.date))));
+                // Find latest material received (including remakes)
+                const latestMaterialReceived = new Date(Math.max(...sortedSessions.map(s => 
+                    new Date(s.isRemake ? s.dateReceived : (s.materialReceivedDate || s.date))
+                )));
                 latestMaterialReceived.setHours(0, 0, 0, 0);
                 
-                const videosReadyDate = new Date(latestMaterialReceived);
-                videosReadyDate.setDate(videosReadyDate.getDate() + 10);
+                // Find latest NON-REMAKE session for videos ready date
+                const regularSessions = sortedSessions.filter(s => !s.isRemake);
+                let videosReadyDate;
+                if (regularSessions.length > 0) {
+                    const latestRegularSession = new Date(Math.max(...regularSessions.map(s => 
+                        new Date(s.materialReceivedDate || s.date)
+                    )));
+                    videosReadyDate = new Date(latestRegularSession);
+                    videosReadyDate.setDate(videosReadyDate.getDate() + 10);
+                } else {
+                    // All remakes, ready immediately
+                    videosReadyDate = new Date(latestMaterialReceived);
+                }
                 
                 const daysUntilKickoff = kickoffDate ? Math.floor((kickoffDate - today) / (1000 * 60 * 60 * 24)) : 0;
                 const videosReadyBeforeKickoff = kickoffDate ? videosReadyDate <= kickoffDate : false;
@@ -216,13 +234,13 @@
                 };
             }
             
-            // POST-LAUNCH: Use CHAIN METHOD
+            // POST-LAUNCH: Use CHAIN METHOD (including remakes)
             // Separate sessions into before/at kickoff and after kickoff
             const preKickoffSessions = [];
             const postKickoffSessions = [];
             
             sortedSessions.forEach(session => {
-                const materialDate = new Date(session.materialReceivedDate || session.date);
+                const materialDate = new Date(session.isRemake ? session.dateReceived : (session.materialReceivedDate || session.date));
                 materialDate.setHours(0, 0, 0, 0);
                 
                 if (materialDate <= kickoffDate) {
@@ -237,14 +255,14 @@
             
             // 1. Add all pre-kickoff sessions coverage together from kickoff date
             if (preKickoffSessions.length > 0) {
-                const preKickoffVideos = preKickoffSessions.reduce((sum, s) => sum + calculateSessionVideos(s.duration), 0);
+                const preKickoffVideos = preKickoffSessions.reduce((sum, s) => sum + calculateSessionVideos(s), 0);
                 const preKickoffCoverageDays = Math.floor(preKickoffVideos / videosPerDay);
                 coverageEndDate.setDate(coverageEndDate.getDate() + preKickoffCoverageDays);
             }
             
-            // 2. Chain post-kickoff sessions one by one
+            // 2. Chain post-kickoff sessions one by one (remakes included)
             postKickoffSessions.forEach(session => {
-                const sessionVideos = calculateSessionVideos(session.duration);
+                const sessionVideos = calculateSessionVideos(session);
                 const sessionCoverageDays = Math.floor(sessionVideos / videosPerDay);
                 
                 // Each session starts the day after previous coverage ends
@@ -270,8 +288,10 @@
                 displayCoverageDays = daysRemaining; // Actual days remaining
             }
             
-            // Find latest material received for display
-            const latestMaterialReceived = new Date(Math.max(...sortedSessions.map(s => new Date(s.materialReceivedDate || s.date))));
+            // Find latest material received for display (including remakes)
+            const latestMaterialReceived = new Date(Math.max(...sortedSessions.map(s => 
+                new Date(s.isRemake ? s.dateReceived : (s.materialReceivedDate || s.date))
+            )));
             
             return {
                 sessionCount: sortedSessions.length,
@@ -292,35 +312,70 @@
         // Actions
         function showAddSession() {
             data.addingSession = true;
+            data.isAddingRemake = false;
             draw();
         }
 
         function cancelAddSession() {
             data.addingSession = false;
+            data.isAddingRemake = false;
+            draw();
+        }
+
+        function toggleRemakeMode() {
+            data.isAddingRemake = !data.isAddingRemake;
             draw();
         }
 
         function addSession() {
             const clientId = parseInt(document.getElementById('session-client').value);
-            const dateFiled = document.getElementById('session-date-filed').value;
-            const materialReceivedDate = document.getElementById('session-material-received').value;
-            const duration = parseInt(document.getElementById('session-duration').value);
 
-            if (!clientId || !dateFiled || !materialReceivedDate || !duration) {
-                alert('Please fill all fields');
+            if (!clientId) {
+                alert('Please select a client');
                 return;
             }
 
-            data.sessions.push({
-                id: Date.now(),
-                clientId,
-                dateFiled,
-                materialReceivedDate,
-                duration,
-                materialReceived: true // Auto-set to true since we have a date
-            });
+            if (data.isAddingRemake) {
+                // Adding a REMAKE
+                const dateReceived = document.getElementById('remake-date-received').value;
+                const numberOfVideos = parseInt(document.getElementById('remake-videos').value);
+
+                if (!dateReceived || !numberOfVideos) {
+                    alert('Please fill all remake fields');
+                    return;
+                }
+
+                data.sessions.push({
+                    id: Date.now(),
+                    clientId,
+                    isRemake: true,
+                    dateReceived,
+                    numberOfVideos,
+                    materialReceived: true
+                });
+            } else {
+                // Adding a REGULAR SESSION
+                const dateFiled = document.getElementById('session-date-filed').value;
+                const materialReceivedDate = document.getElementById('session-material-received').value;
+                const duration = parseInt(document.getElementById('session-duration').value);
+
+                if (!dateFiled || !materialReceivedDate || !duration) {
+                    alert('Please fill all fields');
+                    return;
+                }
+
+                data.sessions.push({
+                    id: Date.now(),
+                    clientId,
+                    dateFiled,
+                    materialReceivedDate,
+                    duration,
+                    materialReceived: true
+                });
+            }
 
             data.addingSession = false;
+            data.isAddingRemake = false;
             draw();
             save();
         }
@@ -669,7 +724,7 @@
                             <div class="flex justify-between items-center">
                                 <div>
                                     <h1 class="text-3xl font-bold text-slate-900">Content Production Tracker v2.0</h1>
-                                    <p class="text-slate-600 mt-1">Track filming sessions & content coverage • Every 10 mins = 2 videos • Urgent < 10 days • Chain Method</p>
+                                    <p class="text-slate-600 mt-1">Track filming sessions & content coverage • Every 10 mins = 2 videos • Urgent < 10 days • Chain Method • 🎬 Remakes Support</p>
                                 </div>
                                 <div id="sync-status" class="flex items-center gap-2 text-sm">
                                     <span class="text-emerald-600 font-medium">Loaded</span>
@@ -725,7 +780,11 @@
                                     const sessionsWithClients = data.sessions.map(s => {
                                         const client = allClients.find(c => c.id === s.clientId);
                                         return { ...s, clientName: client ? client.name : 'Unknown' };
-                                    }).sort((a, b) => new Date(b.dateFiled || b.date) - new Date(a.dateFiled || a.date));
+                                    }).sort((a, b) => {
+                                        const dateA = new Date(a.isRemake ? a.dateReceived : (a.dateFiled || a.date));
+                                        const dateB = new Date(b.isRemake ? b.dateReceived : (b.dateFiled || b.date));
+                                        return dateB - dateA;
+                                    });
                                     
                                     if (sessionsWithClients.length === 0) {
                                         return '<p class="text-slate-500 text-center py-8">No sessions recorded yet</p>';
@@ -734,26 +793,43 @@
                                     return `
                                         <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                                             ${sessionsWithClients.map(s => {
-                                                const videos = calculateSessionVideos(s.duration);
-                                                const hasMaterial = s.materialReceivedDate || s.materialReceived;
-                                                const filedDate = s.dateFiled || s.date;
-                                                return `
-                                                    <div class="bg-slate-50 rounded-lg p-4 border ${hasMaterial ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}">
-                                                        <div class="flex items-center gap-2 mb-2">
-                                                            <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                                                            <span class="font-bold text-slate-900">${new Date(filedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                                if (s.isRemake) {
+                                                    // REMAKE
+                                                    return `
+                                                        <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-300">
+                                                            <div class="flex items-center gap-2 mb-2">
+                                                                <span class="text-2xl">🎬</span>
+                                                                <span class="font-bold text-purple-900">REMAKE</span>
+                                                            </div>
+                                                            <div class="font-semibold text-slate-900 mb-1">${s.clientName}</div>
+                                                            <div class="text-sm text-slate-600 mb-1">Received: ${new Date(s.dateReceived).toLocaleDateString()}</div>
+                                                            <div class="text-sm text-slate-600 mb-2">${s.numberOfVideos} videos</div>
+                                                            <span class="text-xs px-2 py-1 bg-purple-200 text-purple-800 rounded font-medium">✓ Ready Immediately</span>
                                                         </div>
-                                                        <div class="font-semibold text-slate-900 mb-1">${s.clientName}</div>
-                                                        <div class="text-sm text-slate-600 mb-1">${s.duration} min • ${videos} videos</div>
-                                                        ${s.materialReceivedDate ? `<div class="text-xs text-slate-600 mb-2">Material: ${new Date(s.materialReceivedDate).toLocaleDateString()}</div>` : ''}
-                                                        <div class="flex items-center gap-2">
-                                                            ${hasMaterial ? 
-                                                                '<span class="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-medium">✓ Material Received</span>' :
-                                                                '<span class="text-xs px-2 py-1 bg-amber-100 text-amber-700 rounded font-medium">⏳ Pending</span>'
-                                                            }
+                                                    `;
+                                                } else {
+                                                    // REGULAR SESSION
+                                                    const videos = calculateSessionVideos(s);
+                                                    const hasMaterial = s.materialReceivedDate || s.materialReceived;
+                                                    const filedDate = s.dateFiled || s.date;
+                                                    return `
+                                                        <div class="bg-slate-50 rounded-lg p-4 border ${hasMaterial ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}">
+                                                            <div class="flex items-center gap-2 mb-2">
+                                                                <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                                                <span class="font-bold text-slate-900">${new Date(filedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                                            </div>
+                                                            <div class="font-semibold text-slate-900 mb-1">${s.clientName}</div>
+                                                            <div class="text-sm text-slate-600 mb-1">${s.duration} min • ${videos} videos</div>
+                                                            ${s.materialReceivedDate ? `<div class="text-xs text-slate-600 mb-2">Material: ${new Date(s.materialReceivedDate).toLocaleDateString()}</div>` : ''}
+                                                            <div class="flex items-center gap-2">
+                                                                ${hasMaterial ? 
+                                                                    '<span class="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-medium">✓ Material Received</span>' :
+                                                                    '<span class="text-xs px-2 py-1 bg-amber-100 text-amber-700 rounded font-medium">⏳ Pending</span>'
+                                                                }
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                `;
+                                                    `;
+                                                }
                                             }).join('')}
                                         </div>
                                     `;
@@ -932,7 +1008,21 @@
                         <!-- Add Session Form -->
                         ${data.addingSession ? `
                             <div class="bg-white rounded-xl shadow-lg p-6 mb-8 border-2 border-purple-200 fade-in">
-                                <h3 class="text-lg font-bold text-slate-900 mb-4">Add New Session</h3>
+                                <h3 class="text-lg font-bold text-slate-900 mb-4">Add New ${data.isAddingRemake ? 'Remake' : 'Session'}</h3>
+                                
+                                <!-- Remake Toggle -->
+                                <div class="mb-4 p-3 bg-blue-50 rounded-lg">
+                                    <label class="flex items-center gap-3 cursor-pointer">
+                                        <input type="checkbox" ${data.isAddingRemake ? 'checked' : ''} 
+                                            onchange="toggleRemakeMode()"
+                                            class="w-5 h-5 text-purple-600 rounded">
+                                        <div>
+                                            <span class="text-sm font-bold text-slate-900">🎬 This is a Remake</span>
+                                            <p class="text-xs text-slate-600">External videos received (ready immediately, no production time)</p>
+                                        </div>
+                                    </label>
+                                </div>
+
                                 <div class="grid grid-cols-2 gap-4">
                                     <div class="col-span-2">
                                         <label class="block text-sm font-medium text-slate-700 mb-2">Client</label>
@@ -941,23 +1031,39 @@
                                             ${allClients.map(c => `<option value="${c.id}">${c.name} (${c.managerName})</option>`).join('')}
                                         </select>
                                     </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-slate-700 mb-2">Date Filmed</label>
-                                        <input type="date" id="session-date-filed" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-medium text-slate-700 mb-2">Material Received Date</label>
-                                        <input type="date" id="session-material-received" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
-                                    </div>
-                                    <div class="col-span-2">
-                                        <label class="block text-sm font-medium text-slate-700 mb-2">Duration (minutes)</label>
-                                        <input type="number" id="session-duration" placeholder="120" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
-                                        <p class="text-xs text-slate-500 mt-1">Formula: Duration ÷ 10 × 2 = Videos</p>
-                                    </div>
+                                    
+                                    ${data.isAddingRemake ? `
+                                        <!-- REMAKE FIELDS -->
+                                        <div class="col-span-2">
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Date Received</label>
+                                            <input type="date" id="remake-date-received" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                            <p class="text-xs text-slate-500 mt-1">When did you receive these remake videos?</p>
+                                        </div>
+                                        <div class="col-span-2">
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Number of Videos</label>
+                                            <input type="number" id="remake-videos" placeholder="20" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                            <p class="text-xs text-slate-500 mt-1">How many remake videos did you receive?</p>
+                                        </div>
+                                    ` : `
+                                        <!-- REGULAR SESSION FIELDS -->
+                                        <div>
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Date Filmed</label>
+                                            <input type="date" id="session-date-filed" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Material Received Date</label>
+                                            <input type="date" id="session-material-received" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        </div>
+                                        <div class="col-span-2">
+                                            <label class="block text-sm font-medium text-slate-700 mb-2">Duration (minutes)</label>
+                                            <input type="number" id="session-duration" placeholder="120" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                            <p class="text-xs text-slate-500 mt-1">Formula: Duration ÷ 10 × 2 = Videos</p>
+                                        </div>
+                                    `}
                                 </div>
                                 <div class="flex gap-3 mt-6">
                                     <button onclick="addSession()" class="flex-1 bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 font-medium">
-                                        Add Session
+                                        Add ${data.isAddingRemake ? 'Remake' : 'Session'}
                                     </button>
                                     <button onclick="cancelAddSession()" class="px-6 py-3 border border-slate-300 rounded-lg hover:bg-slate-100">
                                         Cancel
@@ -1206,34 +1312,62 @@
                         <div class="space-y-3">
                             ${sessions.length === 0 ? 
                                 '<p class="text-slate-500 text-center py-8">No sessions recorded</p>' :
-                                sessions.map(session => {
-                                    const videos = calculateSessionVideos(session.duration);
-                                    const filedDate = session.dateFiled || session.date;
-                                    const materialDate = session.materialReceivedDate || (session.materialReceived ? filedDate : 'Not received');
-                                    return `
-                                        <div class="bg-slate-50 rounded-lg p-4 flex items-center justify-between">
-                                            <div class="flex-1">
-                                                <div class="flex items-center gap-3 mb-2">
-                                                    <span class="font-semibold text-slate-900">Filmed: ${new Date(filedDate).toLocaleDateString()}</span>
-                                                    <span class="text-sm text-slate-600">${session.duration} min</span>
-                                                    <span class="text-sm font-medium text-purple-600">${videos} videos</span>
+                                sessions.sort((a, b) => {
+                                    const dateA = new Date(a.isRemake ? a.dateReceived : (a.dateFiled || a.date));
+                                    const dateB = new Date(b.isRemake ? b.dateReceived : (b.dateFiled || b.date));
+                                    return dateA - dateB;
+                                }).map(session => {
+                                    if (session.isRemake) {
+                                        // REMAKE
+                                        return `
+                                            <div class="bg-purple-50 rounded-lg p-4 border-2 border-purple-300 flex items-center justify-between">
+                                                <div class="flex-1">
+                                                    <div class="flex items-center gap-3 mb-2">
+                                                        <span class="text-2xl">🎬</span>
+                                                        <span class="font-bold text-purple-900">REMAKE</span>
+                                                    </div>
+                                                    <div class="text-sm text-slate-700 mb-2">
+                                                        Received: ${new Date(session.dateReceived).toLocaleDateString()}
+                                                    </div>
+                                                    <div class="text-sm font-medium text-purple-600">${session.numberOfVideos} videos</div>
+                                                    <div class="text-xs text-purple-700 mt-1">Ready immediately (no production time)</div>
                                                 </div>
-                                                <div class="text-sm text-slate-600 mb-2">
-                                                    Material received: ${materialDate !== 'Not received' ? new Date(materialDate).toLocaleDateString() : materialDate}
-                                                </div>
-                                                <label class="flex items-center gap-2 cursor-pointer">
-                                                    <input type="checkbox" ${session.materialReceivedDate || session.materialReceived ? 'checked' : ''} 
-                                                        onchange="toggleMaterial(${session.id}); setTimeout(() => this.closest('.fixed').remove(), 100);"
-                                                        class="w-4 h-4 text-purple-600 rounded">
-                                                    <span class="text-sm text-slate-600">Material Received</span>
-                                                </label>
+                                                <button onclick="deleteSession(${session.id}); this.closest('.fixed').remove();" 
+                                                    class="p-2 text-red-600 hover:bg-red-50 rounded-lg">
+                                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                                </button>
                                             </div>
-                                            <button onclick="deleteSession(${session.id}); this.closest('.fixed').remove();" 
-                                                class="p-2 text-red-600 hover:bg-red-50 rounded-lg">
-                                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                                            </button>
-                                        </div>
-                                    `;
+                                        `;
+                                    } else {
+                                        // REGULAR SESSION
+                                        const videos = calculateSessionVideos(session);
+                                        const filedDate = session.dateFiled || session.date;
+                                        const materialDate = session.materialReceivedDate || (session.materialReceived ? filedDate : 'Not received');
+                                        return `
+                                            <div class="bg-slate-50 rounded-lg p-4 flex items-center justify-between">
+                                                <div class="flex-1">
+                                                    <div class="flex items-center gap-3 mb-2">
+                                                        <span class="font-semibold text-slate-900">Filmed: ${new Date(filedDate).toLocaleDateString()}</span>
+                                                        <span class="text-sm text-slate-600">${session.duration} min</span>
+                                                        <span class="text-sm font-medium text-purple-600">${videos} videos</span>
+                                                    </div>
+                                                    <div class="text-sm text-slate-600 mb-2">
+                                                        Material received: ${materialDate !== 'Not received' ? new Date(materialDate).toLocaleDateString() : materialDate}
+                                                    </div>
+                                                    <label class="flex items-center gap-2 cursor-pointer">
+                                                        <input type="checkbox" ${session.materialReceivedDate || session.materialReceived ? 'checked' : ''} 
+                                                            onchange="toggleMaterial(${session.id}); setTimeout(() => this.closest('.fixed').remove(), 100);"
+                                                            class="w-4 h-4 text-purple-600 rounded">
+                                                        <span class="text-sm text-slate-600">Material Received</span>
+                                                    </label>
+                                                </div>
+                                                <button onclick="deleteSession(${session.id}); this.closest('.fixed').remove();" 
+                                                    class="p-2 text-red-600 hover:bg-red-50 rounded-lg">
+                                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                                </button>
+                                            </div>
+                                        `;
+                                    }
                                 }).join('')
                             }
                         </div>
