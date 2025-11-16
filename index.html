@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -140,12 +139,12 @@
             return clients;
         }
 
-        // CHANGED: Every 10 mins = 2 videos (was 4)
+        // CHANGED: Every 10 mins = 3 videos (was 2)
         function calculateSessionVideos(session) {
             if (session.isRemake) {
                 return session.numberOfVideos; // Remakes have direct video count
             }
-            return Math.floor(session.duration / 10) * 2;
+            return Math.floor(session.duration / 10) * 3;
         }
 
         function getClientStats(clientId) {
